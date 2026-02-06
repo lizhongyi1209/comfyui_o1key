@@ -1,0 +1,634 @@
+# Comfyui_o1key 开发指南
+
+## 对话原则
+始终使用中文进行对话。
+
+## 项目概述
+
+这是一个 ComfyUI 自定义节点插件，通过 api.o1key.com 调用 AI 模型进行图像生成。
+
+### 技术栈
+- Python 3.7+
+- ComfyUI 框架
+- aiohttp (异步 HTTP)
+- Pillow (图像处理)
+- PyTorch (张量处理)
+
+---
+
+## 目录结构
+
+```
+Comfyui_o1key/
+├── __init__.py              # 节点注册入口
+├── models_config.py         # 模型配置中心 ⭐ 管理所有支持的模型
+├── version.txt              # 版本号文件
+├── update.bat               # Windows 自动更新脚本
+├── update.sh                # Linux/Mac 自动更新脚本
+├── nodes/                   # 节点模块
+│   ├── __init__.py
+│   ├── nano_banana_pro.py   # NanoBananaPro 节点
+│   └── batch_nano_banana_pro.py  # 批量节点
+├── utils/                   # 工具模块
+│   ├── __init__.py
+│   ├── image_utils.py       # 图像转换工具
+│   ├── config.py            # 配置管理
+│   └── update_checker.py    # 更新检查器
+├── clients/                 # API 客户端
+│   ├── __init__.py
+│   ├── base_client.py       # 客户端基类
+│   └── gemini_client.py     # Gemini API 客户端
+├── .config                  # API 配置文件（不提交）
+├── .config.example          # 配置示例
+├── requirements.txt         # 依赖包
+└── README.md                # 用户文档
+```
+
+---
+
+## 模型管理系统
+
+### 概述
+
+所有 Nano Banana Pro 支持的模型都在 `models_config.py` 中统一管理。要添加新模型或临时关闭某个模型，只需编辑这个文件即可。
+
+### 模型配置文件 (models_config.py)
+
+#### 配置结构
+
+```python
+GEMINI_MODELS = [
+    {
+        "id": "gemini-3-pro-image-preview-url",
+        "description": "URL 模式,根据分辨率自动选择端点 (1K/2K/4K)",
+        "enabled": True,
+        "endpoint_type": "dynamic",
+        "endpoint": None  # 动态端点，由代码根据分辨率选择
+    },
+    {
+        "id": "gemini-3-pro-image-preview",
+        "description": "标准模式,固定端点",
+        "enabled": True,
+        "endpoint_type": "standard",
+        "endpoint": "/v1beta/models/gemini-3-pro-image-preview:generateContent"
+    },
+    # 更多模型...
+]
+```
+
+#### 字段说明
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `id` | string | 是 | 模型标识符，用于 API 调用 |
+| `description` | string | 是 | 模型描述，说明特点和适用场景 |
+| `enabled` | boolean | 是 | 是否启用该模型（false 则在节点中隐藏） |
+| `endpoint_type` | string | 是 | 端点类型："dynamic", "standard", "flatfee" |
+| `endpoint` | string | 是 | API 端点路径（动态端点设为 None） |
+
+#### 端点类型说明
+
+- **dynamic**: 根据分辨率动态选择端点（如 gemini-3-pro-image-preview-url）
+- **standard**: 使用固定端点（如 gemini-3-pro-image-preview）
+- **flatfee**: 固定费用模式端点（如 gemini-3-pro-image-preview-flatfee）
+
+### 常见操作
+
+#### 1. 添加新模型
+
+在 `GEMINI_MODELS` 列表末尾添加新模型：
+
+```python
+GEMINI_MODELS = [
+    # ... 现有模型 ...
+    {
+        "id": "gemini-新模型名称",
+        "description": "新模型的描述和特点",
+        "enabled": True,
+        "endpoint_type": "standard",  # 根据实际情况选择
+        "endpoint": "/v1beta/models/gemini-新模型名称:generateContent"  # 配置端点
+    }
+]
+```
+
+**注意**：
+- **固定端点模型**：直接在 `endpoint` 字段填写完整的端点路径即可，无需修改代码
+- **动态端点模型**：如果模型需要根据分辨率动态选择端点，设置 `endpoint_type: "dynamic"` 和 `endpoint: None`，并在 `gemini_client.py` 的 `get_endpoint()` 方法中添加对应逻辑
+
+#### 2. 临时关闭模型
+
+将模型的 `enabled` 字段设为 `False`：
+
+```python
+{
+    "id": "gemini-3-pro-image-preview-url",
+    "description": "URL 模式",
+    "enabled": False,  # 临时关闭
+    "endpoint_type": "dynamic"
+}
+```
+
+关闭后，该模型将不会出现在 ComfyUI 节点的下拉列表中。
+
+#### 3. 重新启用模型
+
+将 `enabled` 改回 `True`：
+
+```python
+{
+    "id": "gemini-3-pro-image-preview-url",
+    "enabled": True,  # 重新启用
+    # ...
+}
+```
+
+#### 4. 修改模型描述
+
+直接编辑 `description` 字段：
+
+```python
+{
+    "id": "gemini-3-pro-image-preview",
+    "description": "标准模式,固定端点,适用于常规图像生成",  # 更新描述
+    # ...
+}
+```
+
+### 工具函数
+
+`models_config.py` 提供了一些工具函数，可在代码中使用：
+
+```python
+from ..models_config import (
+    get_enabled_models,      # 获取启用的模型列表
+    get_all_models,          # 获取所有模型（包括禁用的）
+    get_model_config,        # 获取指定模型的完整配置
+    is_model_enabled,        # 检查模型是否启用
+    get_model_description,   # 获取模型描述
+    get_endpoint_type,       # 获取端点类型
+    get_model_endpoint       # 获取模型端点
+)
+
+# 示例：获取启用的模型
+enabled = get_enabled_models()
+# ['gemini-3-pro-image-preview-url', 'gemini-3-pro-image-preview', ...]
+
+# 示例：获取模型配置
+config = get_model_config("gemini-3-pro-image-preview-url")
+# {'id': '...', 'description': '...', 'enabled': True, 'endpoint_type': 'dynamic', 'endpoint': None}
+
+# 示例：获取模型端点
+endpoint = get_model_endpoint("gemini-3-pro-image-preview")
+# '/v1beta/models/gemini-3-pro-image-preview:generateContent'
+```
+
+### 节点集成
+
+所有使用模型列表的节点都会自动从 `models_config.py` 加载：
+
+```python
+from ..models_config import get_enabled_models
+
+class NanoBananaPro:
+    @classmethod
+    def INPUT_TYPES(cls):
+        # 自动从配置加载启用的模型
+        enabled_models = get_enabled_models()
+        
+        return {
+            "required": {
+                "模型": (enabled_models, {
+                    "default": enabled_models[0]
+                }),
+                # ...
+            }
+        }
+```
+
+### 配置验证
+
+`models_config.py` 在加载时会自动验证配置：
+
+- 检查每个模型是否有必需字段（id, description, enabled, endpoint_type, endpoint）
+- 检查 `endpoint_type` 是否合法（dynamic, standard, flatfee）
+- 检查非动态端点模型必须配置有效的 `endpoint`
+- 检查端点格式是否正确（应以 `/v1beta/models/` 开头）
+- 确保至少有一个模型是启用的
+
+如果配置不合法，会在终端打印警告信息。
+
+### 最佳实践
+
+1. **添加新模型前**：
+   - 确认模型使用 Gemini 原生接口格式
+   - 确认端点规则（dynamic/standard/flatfee）
+   - 编写清晰的描述说明
+
+2. **临时测试**：
+   - 关闭其他模型，只启用测试模型
+   - 验证功能后再重新启用其他模型
+
+3. **版本控制**：
+   - `models_config.py` 应纳入版本控制
+   - 重大模型变更应记录在 `CHANGELOG.md` 中
+
+4. **文档更新**：
+   - 添加新模型后，更新 `README.md` 中的模型列表
+   - 如有特殊使用说明，添加到文档中
+
+---
+
+## 开发新节点流程
+
+### 1. 创建节点文件
+
+在 `nodes/` 目录下创建新的 Python 文件：
+
+```python
+# nodes/my_new_node.py
+
+from typing import Optional, Tuple
+import torch
+
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor
+from ..clients.gemini_client import GeminiAPIClient
+
+
+class MyNewNode:
+    """节点描述"""
+    
+    def __init__(self):
+        self.client = None
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                # 更多参数...
+            },
+            "optional": {
+                "images": ("IMAGE",)
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    FUNCTION = "execute"
+    CATEGORY = "image/generation"
+    
+    def execute(self, prompt: str, images: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor]:
+        # 实现逻辑
+        pass
+```
+
+### 2. 注册节点
+
+在 `nodes/__init__.py` 中添加导出：
+
+```python
+from .my_new_node import MyNewNode
+__all__ = ['NanoBananaPro', 'MyNewNode']
+```
+
+在根 `__init__.py` 中注册：
+
+```python
+from .nodes import NanoBananaPro, MyNewNode
+
+NODE_CLASS_MAPPINGS = {
+    "NanoBananaPro": NanoBananaPro,
+    "MyNewNode": MyNewNode
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "NanoBananaPro": "Nano Banana Pro",
+    "MyNewNode": "My New Node"
+}
+```
+
+### 3. 更新 CHANGELOG.md
+
+记录新增功能。
+
+---
+
+## ComfyUI 节点规范
+
+### INPUT_TYPES 参数类型
+
+| 类型 | 格式 | 示例 |
+|------|------|------|
+| 字符串 | `("STRING", {...})` | `("STRING", {"default": "", "multiline": True})` |
+| 整数 | `("INT", {...})` | `("INT", {"default": 1, "min": 1, "max": 100})` |
+| 浮点数 | `("FLOAT", {...})` | `("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1})` |
+| 下拉选项 | `([...], {...})` | `(["option1", "option2"], {"default": "option1"})` |
+| 图像 | `("IMAGE",)` | 放在 optional 中 |
+
+### 返回值规范
+
+```python
+RETURN_TYPES = ("IMAGE", "MASK", "STRING")  # 类型元组
+RETURN_NAMES = ("images", "mask", "text")   # 名称元组
+```
+
+### 必须的类属性
+
+```python
+FUNCTION = "execute"           # 执行函数名
+CATEGORY = "image/generation"  # 节点分类路径
+```
+
+---
+
+## 工具模块使用
+
+### 图像转换 (utils/image_utils.py)
+
+```python
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor
+
+# ComfyUI Tensor → PIL Image 列表
+pil_images = tensor_to_pil(tensor)  # tensor: [B, H, W, C], range [0, 1]
+
+# PIL Image 列表 → ComfyUI Tensor
+tensor = pil_to_tensor(pil_images)  # 返回 [B, H, W, C], range [0, 1]
+
+# PIL → Base64
+from ..utils.image_utils import encode_image_to_base64
+b64_str = encode_image_to_base64(pil_image)
+
+# Base64 → PIL
+from ..utils.image_utils import decode_base64_to_pil
+pil_image = decode_base64_to_pil(b64_str)
+```
+
+### 配置管理 (utils/config.py)
+
+```python
+from ..utils.config import get_api_key, get_api_key_or_raise, load_config
+
+# 获取 API 密钥（返回 None 如果未找到）
+api_key = get_api_key("O1KEY_API_KEY")
+
+# 获取 API 密钥（抛出异常如果未找到）
+api_key = get_api_key_or_raise("O1KEY_API_KEY")
+
+# 加载完整配置
+config = load_config()
+```
+
+---
+
+## API 客户端使用
+
+### 使用 GeminiAPIClient
+
+```python
+from ..clients.gemini_client import GeminiAPIClient
+
+# 初始化（自动读取配置）
+client = GeminiAPIClient()
+
+# 同步生成（用于 ComfyUI 节点）
+images = client.generate_sync(
+    prompt="描述文字",
+    model="gemini-3-pro-image-preview-url",
+    resolution="2K",
+    aspect_ratio="1:1",
+    batch_size=1,
+    images=None,  # 可选：输入图像列表
+    progress_callback=None
+)
+```
+
+### 创建新的 API 客户端
+
+继承 `BaseAPIClient` 并实现抽象方法：
+
+```python
+from ..clients.base_client import BaseAPIClient
+
+class MyAPIClient(BaseAPIClient):
+    def __init__(self):
+        super().__init__(
+            base_url="https://api.example.com",
+            api_key=get_api_key_or_raise("MY_API_KEY"),
+            max_request_size=20 * 1024 * 1024
+        )
+    
+    def get_endpoint(self, **kwargs) -> str:
+        return "/v1/generate"
+    
+    def build_request_body(self, **kwargs) -> dict:
+        return {"prompt": kwargs.get("prompt", "")}
+    
+    def parse_response(self, response: dict) -> Any:
+        return response.get("result")
+```
+
+---
+
+## API 端点说明
+
+### Gemini 模型端点
+
+**gemini-3-pro-image-preview-url** (根据分辨率动态选择):
+- 1K: `/v1beta/models/gemini-3-pro-image-preview-url:generateContent`
+- 2K: `/v1beta/models/gemini-3-pro-image-preview-2k-url:generateContent`
+- 4K: `/v1beta/models/gemini-3-pro-image-preview-4k-url:generateContent`
+
+**gemini-3-pro-image-preview** (固定端点):
+- `/v1beta/models/gemini-3-pro-image-preview:generateContent`
+
+**gemini-3-pro-image-preview-flatfee** (固定端点):
+- `/v1beta/models/gemini-3-pro-image-preview-flatfee:generateContent`
+
+### 请求格式
+
+```json
+{
+  "contents": [{
+    "role": "user",
+    "parts": [
+      {"text": "提示词"},
+      {"inline_data": {"mime_type": "image/png", "data": "base64..."}}
+    ]
+  }],
+  "generationConfig": {
+    "responseModalities": ["TEXT", "IMAGE"],
+    "imageConfig": {
+      "aspectRatio": "1:1",
+      "imageSize": "2K"
+    }
+  }
+}
+```
+
+---
+
+## 代码规范
+
+### 命名约定
+
+- 类名：PascalCase（如 `NanoBananaPro`）
+- 函数/方法：snake_case（如 `tensor_to_pil`）
+- 常量：UPPER_CASE（如 `API_BASE_URL`）
+- 私有方法：前缀下划线（如 `_load_config`）
+
+### 类型注解
+
+所有公开函数必须有类型注解：
+
+```python
+def function_name(param1: str, param2: Optional[int] = None) -> List[Image.Image]:
+    pass
+```
+
+### 文档字符串
+
+使用 Google 风格的 docstring：
+
+```python
+def function_name(param1: str, param2: int) -> bool:
+    """
+    函数简短描述
+    
+    Args:
+        param1: 参数1说明
+        param2: 参数2说明
+    
+    Returns:
+        返回值说明
+    
+    Raises:
+        ValueError: 异常情况说明
+    
+    Example:
+        >>> result = function_name("test", 42)
+        >>> print(result)
+        True
+    """
+    pass
+```
+
+### 错误处理
+
+```python
+try:
+    # 业务逻辑
+    pass
+except ValueError as e:
+    # 用户输入错误
+    print(f"节点名: 输入错误 - {str(e)}")
+    raise
+except RuntimeError as e:
+    # API 或网络错误
+    print(f"节点名: API 错误 - {str(e)}")
+    raise
+except Exception as e:
+    # 未知错误
+    print(f"节点名: 未知错误 - {str(e)}")
+    raise
+```
+
+---
+
+## 限制与约束
+
+| 限制项 | 值 | 说明 |
+|--------|-----|------|
+| 请求体大小 | 20MB | 超过会报错 |
+| 输入图像数量 | 14张 | 图生图模式限制 |
+| 批次大小 | 1-1000 | 并发生成数量 |
+| 支持的分辨率 | 1K/2K/4K | API 限制 |
+
+---
+
+## 测试检查清单
+
+新节点开发完成后，验证以下场景：
+
+- [ ] 文生图基础功能
+- [ ] 图生图功能（如支持）
+- [ ] 不同分辨率（1K/2K/4K）
+- [ ] 不同宽高比
+- [ ] 批量生成
+- [ ] 错误处理（无 API 密钥、网络错误等）
+- [ ] 边界条件（最大图像数、最大批次）
+
+---
+
+## 更新日志
+
+修改代码后，更新 `CHANGELOG.md` 记录变更。
+
+格式：
+```markdown
+## [版本号] - 日期
+
+### Added
+- 新增功能
+
+### Changed
+- 变更内容
+
+### Fixed
+- 修复问题
+```
+
+---
+
+## 版本发布流程
+
+### 1. 准备发布
+
+发布新版本前确认以下事项：
+
+- [ ] 所有功能测试通过
+- [ ] 更新 `CHANGELOG.md`（记录本次变更）
+- [ ] 更新 `version.txt`（更新版本号）
+- [ ] 更新 `README.md`（如有新功能需要说明）
+
+### 2. 版本号规范
+
+遵循语义化版本 (Semantic Versioning)：
+
+- **主版本号** (Major): 重大架构变更、不兼容的 API 修改
+- **次版本号** (Minor): 新增功能、向后兼容
+- **修订号** (Patch): Bug 修复、小改进
+
+示例：`v1.10.2` → Major.Minor.Patch
+
+### 3. 发布步骤
+
+```bash
+# 1. 更新版本号
+echo "v1.11.0" > version.txt
+
+# 2. 提交变更
+git add .
+git commit -m "Release v1.11.0: 添加新功能描述"
+
+# 3. 创建标签
+git tag v1.11.0
+
+# 4. 推送到远程
+git push origin main --tags
+```
+
+### 4. 用户更新
+
+用户运行更新脚本即可获取最新版本：
+
+- **Windows**: 双击 `update.bat`
+- **Linux/Mac**: 运行 `./update.sh`
+
+更新脚本会自动：
+- 检查远程更新
+- 备份配置文件
+- 拉取最新代码
+- 更新依赖包
+- 显示更新日志
+
+---
