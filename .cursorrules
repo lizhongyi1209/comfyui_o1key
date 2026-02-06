@@ -3,6 +3,41 @@
 ## 对话原则
 始终使用中文进行对话。
 
+## 编码规范 ⚠️ 重要
+
+### 文件编码要求
+- **所有文本文件必须使用 UTF-8 编码（无 BOM）**
+- **行结束符使用 LF（Unix 风格），Windows 批处理文件除外（CRLF）**
+- 项目已配置 `.gitattributes` 和 `.editorconfig` 来自动处理编码
+
+### 编辑器配置
+确保编辑器设置：
+- 文件编码：UTF-8（无 BOM）
+- 行结束符：LF
+- 自动插入文件末尾空行：开启
+
+## Git 提交规范
+
+### Commit Message 规范
+- **所有 commit message 必须使用英文**，避免中文编码问题
+- 使用 Conventional Commits 格式：`<type>: <description>`
+
+### 常用类型
+- `feat`: 新增功能
+- `fix`: 修复问题
+- `docs`: 文档更新
+- `refactor`: 代码重构
+- `style`: 代码格式调整
+- `test`: 测试相关
+- `chore`: 构建/工具配置
+
+### 示例
+```bash
+git commit -m "feat: add new model support"
+git commit -m "fix: resolve image encoding issue"
+git commit -m "docs: update README installation guide"
+```
+
 ## 项目概述
 
 这是一个 ComfyUI 自定义节点插件，通过 api.o1key.com 调用 AI 模型进行图像生成。

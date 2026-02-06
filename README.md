@@ -1,4 +1,4 @@
-﻿# Comfyui_o1key
+# Comfyui_o1key
 
 通过 `api.o1key.com` 调用 AI 模型的 ComfyUI 自定义节点集合。
 
@@ -139,6 +139,31 @@ Google Gemini 模型节点，支持更多模型选择。
 
 ---
 
+## ⚠️ 开发者注意事项
+
+### 文件编码要求
+
+**所有文本文件必须使用 UTF-8 编码（无 BOM）！**
+
+如果你在 GitHub 上看到中文乱码，说明文件编码有问题。请使用以下方法修复：
+
+**Windows 用户：**
+
+```powershell
+.\fix_encoding.ps1
+```
+
+**Linux/Mac 用户：**
+
+```bash
+chmod +x fix_encoding.sh
+./fix_encoding.sh
+```
+
+详细说明请查看 [编码修复指南.md](./编码修复指南.md)
+
+---
+
 ## 📮 联系方式
 
 - GitHub: [@lizhongyi1209](https://github.com/lizhongyi1209)
@@ -146,4 +171,4 @@ Google Gemini 模型节点，支持更多模型选择。
 
 ---
 
-**当前版本：v1.10.0**
+**当前版本：v1.10.1**
