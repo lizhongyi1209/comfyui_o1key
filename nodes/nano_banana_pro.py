@@ -379,3 +379,4 @@ class NanoBananaPro:
             #         print(f"Nano Banana Pro: {balance_info}")
             #     except Exception as e:
             #         print(f"Nano Banana Pro: ⚠️ 余额查询失败 - {str(e)}")
+            pass
