@@ -266,29 +266,35 @@ class NanoBananaPro:
                     scaled = self.resize_to_megapixels(img, 分辨率像素)
                     scaled_images.append(scaled)
                 input_images = scaled_images
-                print(f"Nano Banana Pro: 已缩放 {len(scaled_images)} 张图像到 {分辨率像素}M 像素")
-            
-            # 转换为 API 所需的格式
-            if input_images:
-                print(f"Nano Banana Pro: 图生图模式 (输入 {len(input_images)} 张图像)")
             
             # 解析批量提示词
             batch_prompts = parse_batch_prompts(prompt)
+            
+            # 打印首行概览
+            if batch_prompts:
+                # 批量提示词模式
+                num_prompts = len(batch_prompts)
+                total_images = num_prompts * 生图数量
+                mode_str = f"批量提示词模式 ({num_prompts}个提示词)"
+                if input_images:
+                    mode_str += f" (输入{len(input_images)}张)"
+                print(f"Nano Banana Pro: {mode_str} | {分辨率} {宽高比} | 共{total_images}张")
+            else:
+                # 单提示词模式
+                mode_str = f"图生图模式 (输入{len(input_images)}张)" if input_images else "文生图模式"
+                print(f"Nano Banana Pro: {mode_str} | {分辨率} {宽高比} | {生图数量}张")
             
             # 统计变量
             success_count = 0
             fail_count = 0
             
-            # 进度回调 - 实时显示每个任务的完成状态，并更新 ComfyUI 进度条
+            # 进度回调 - 静默模式，只更新 ComfyUI 进度条
             def progress_callback(current, total, success, error_msg=None):
                 nonlocal success_count, fail_count
                 if success:
                     success_count += 1
-                    print(f"Nano Banana Pro: ✓ [{current}/{total}] 第 {success_count} 张生成成功")
                 else:
                     fail_count += 1
-                    error_brief = error_msg[:50] + "..." if error_msg and len(error_msg) > 50 else error_msg
-                    print(f"Nano Banana Pro: ✗ [{current}/{total}] 生成失败 - {error_brief}")
                 
                 # 更新 ComfyUI 原生进度条
                 if pbar is not None:
@@ -299,9 +305,6 @@ class NanoBananaPro:
                 # 批量提示词模式
                 num_prompts = len(batch_prompts)
                 total_images = num_prompts * 生图数量
-                print(f"Nano Banana Pro: 批量提示词模式 ({num_prompts} 个提示词 × {生图数量} 张/提示词 = {total_images} 张图)")
-                print(f"Nano Banana Pro: 发送请求")
-                print(f"Nano Banana Pro: 生图中...")
                 
                 # 重新创建进度条以匹配实际总数
                 if pbar is not None:
@@ -316,17 +319,8 @@ class NanoBananaPro:
                     images=input_images,
                     progress_callback=progress_callback
                 )
-                
-                if fail_count > 0:
-                    print(f"Nano Banana Pro: 生图完成 (成功: {success_count}, 失败: {fail_count})")
-                else:
-                    print(f"Nano Banana Pro: 全部生图成功！")
             else:
                 # 单提示词模式
-                print(f"Nano Banana Pro: {'图生图' if input_images else '文生图'}模式")
-                print(f"Nano Banana Pro: 发送请求")
-                print(f"Nano Banana Pro: 生图中...")
-                
                 generated_images = self.client.generate_sync(
                     prompt=prompt,
                     model=模型,
@@ -336,18 +330,22 @@ class NanoBananaPro:
                     images=input_images,
                     progress_callback=progress_callback
                 )
-                
-                if fail_count > 0:
-                    print(f"Nano Banana Pro: 生图完成 (成功: {success_count}, 失败: {fail_count})")
-                else:
-                    print(f"Nano Banana Pro: 全部生图成功！")
             
             # 转换输出图像
             output_tensor = pil_to_tensor(generated_images)
             
-            # 计算耗时
+            # 计算耗时并打印最终统计
             elapsed = time.time() - start_time
-            print(f"Nano Banana Pro: 完成生图 (耗时: {elapsed:.2f}s, 成功生成 {len(generated_images)} 张图像)")
+            if elapsed < 1:
+                time_str = f"{elapsed:.3f}s"
+            else:
+                time_str = f"{elapsed:.2f}s"
+            
+            # 打印最终汇总
+            if fail_count > 0:
+                print(f"[4/4] 完成！总耗时 {time_str} | 成功 {success_count}张 | 失败 {fail_count}张")
+            else:
+                print(f"[4/4] 完成！总耗时 {time_str} | 成功 {len(generated_images)}张")
             
             return (output_tensor,)
         

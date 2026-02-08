@@ -282,16 +282,12 @@ class GoogleGemini:
                 video_data=video_data
             )
             
-            # 根据是否有视频设置超时
-            timeout = 300 if video_data else 180
-            
             # 调用底层 API 获取原始响应
             async def get_raw_response():
                 return await self.client.request_async(
                     endpoint, 
                     request_body, 
-                    session=None, 
-                    timeout=timeout
+                    session=None
                 )
             
             # 在独立线程中执行异步请求

@@ -130,13 +130,14 @@ class BaseAPIClient(ABC):
         timeout: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        发送异步 HTTP 请求
+        发送异步 HTTP 请求（带详细计时）
         
         Args:
             endpoint: API 端点
             request_body: 请求体
             session: aiohttp 会话（可选）
             use_bearer_token: 是否使用 Bearer Token 认证
+            timeout: 超时时间（秒）- 已废弃，由服务器端控制
         
         Returns:
             响应 JSON
@@ -144,6 +145,8 @@ class BaseAPIClient(ABC):
         Raises:
             RuntimeError: 请求失败时
         """
+        import time
+        
         url = f"{self.base_url}{endpoint}"
         headers = self.get_headers(use_bearer_token)
         
@@ -156,53 +159,113 @@ class BaseAPIClient(ABC):
             close_session = True
         
         try:
-            # 设置超时
-            timeout_obj = aiohttp.ClientTimeout(total=timeout) if timeout else None
-            async with session.post(url, json=request_body, headers=headers, timeout=timeout_obj) as response:
+            # 连接计时
+            connect_start = time.time()
+            
+            async with session.post(url, json=request_body, headers=headers) as response:
+                connect_time = time.time() - connect_start
+                
                 if response.status != 200:
                     error_text = await response.text()
                     
+                    # 尝试解析 JSON 错误信息，提取关键内容
+                    error_message = error_text
+                    try:
+                        error_json = json.loads(error_text)
+                        # 尝试从多个常见位置提取错误信息
+                        if "error" in error_json:
+                            if isinstance(error_json["error"], dict):
+                                error_message = error_json["error"].get("message", error_text)
+                            else:
+                                error_message = str(error_json["error"])
+                        elif "message" in error_json:
+                            error_message = error_json["message"]
+                    except:
+                        # 如果不是 JSON，使用原始文本
+                        pass
+                    
                     # 针对常见错误状态码提供友好提示
-                    if response.status == 504:
+                    if response.status == 400:
                         raise RuntimeError(
-                            f"API 请求超时 (504 Gateway Timeout)\n"
-                            f"原因：服务器响应超时或该端点暂时不可用\n"
+                            f"请求参数错误 (400 Bad Request)\n"
+                            f"API 返回错误：{error_message}\n"
                             f"建议：\n"
-                            f"  - 尝试使用其他模型\n"
-                            f"  - 稍后重试\n"
-                            f"  - 降低分辨率或减少输入图像数量\n"
-                            f"详细错误: {error_text[:200]}"
+                            f"  - 检查 API 密钥是否有效\n"
+                            f"  - 确认请求参数格式正确"
                         )
-                    elif response.status == 503:
+                    elif response.status == 401:
                         raise RuntimeError(
-                            f"服务暂时不可用 (503 Service Unavailable)\n"
-                            f"原因：模型服务过载或维护中\n"
+                            f"认证失败 (401 Unauthorized)\n"
+                            f"API 返回错误：{error_message}\n"
                             f"建议：\n"
-                            f"  - 稍后重试\n"
-                            f"  - 尝试使用其他模型"
+                            f"  - 检查 API 密钥是否正确\n"
+                            f"  - 确认 API 密钥是否过期"
                         )
-                    elif response.status == 429:
+                    elif response.status == 403:
                         raise RuntimeError(
-                            f"请求频率超限 (429 Too Many Requests)\n"
-                            f"原因：API 配额用尽或请求过于频繁\n"
+                            f"权限不足 (403 Forbidden)\n"
+                            f"API 返回错误：{error_message}\n"
                             f"建议：\n"
-                            f"  - 等待一段时间后重试\n"
-                            f"  - 检查 API 配额是否充足"
+                            f"  - 检查 API 密钥权限\n"
+                            f"  - 确认账户余额充足"
                         )
                     elif response.status == 404:
                         raise RuntimeError(
                             f"端点不存在 (404 Not Found)\n"
-                            f"原因：API 端点路径错误或模型不存在\n"
+                            f"API 返回错误：{error_message}\n"
                             f"建议：\n"
                             f"  - 检查模型名称是否正确\n"
                             f"  - 使用其他可用模型"
                         )
+                    elif response.status == 429:
+                        raise RuntimeError(
+                            f"请求频率超限 (429 Too Many Requests)\n"
+                            f"API 返回错误：{error_message}\n"
+                            f"建议：\n"
+                            f"  - 等待一段时间后重试\n"
+                            f"  - 检查 API 配额是否充足"
+                        )
+                    elif response.status == 503:
+                        raise RuntimeError(
+                            f"服务暂时不可用 (503 Service Unavailable)\n"
+                            f"API 返回错误：{error_message}\n"
+                            f"建议：\n"
+                            f"  - 稍后重试\n"
+                            f"  - 尝试使用其他模型"
+                        )
+                    elif response.status == 504:
+                        raise RuntimeError(
+                            f"API 请求超时 (504 Gateway Timeout)\n"
+                            f"API 返回错误：{error_message}\n"
+                            f"建议：\n"
+                            f"  - 尝试使用其他模型\n"
+                            f"  - 稍后重试\n"
+                            f"  - 降低分辨率或减少输入图像数量"
+                        )
                     else:
                         raise RuntimeError(
-                            f"API 请求失败 (状态码: {response.status}): {error_text}"
+                            f"API 请求失败 (状态码: {response.status})\n"
+                            f"API 返回错误：{error_message}"
                         )
                 
-                return await response.json()
+                # 接收响应体
+                wait_start = time.time()
+                response_data = await response.json()
+                download_time = time.time() - wait_start
+                
+                # 附加计时信息到响应数据（供上层使用）
+                response_size = len(str(response_data))
+                if not isinstance(response_data, dict):
+                    response_data = {"data": response_data}
+                
+                # 将计时信息存储在响应的元数据中
+                response_data["_timing"] = {
+                    "connect_time": connect_time,
+                    "download_time": download_time,
+                    "response_size": response_size
+                }
+                
+                return response_data
         
         finally:
             if close_session:
@@ -222,6 +285,7 @@ class BaseAPIClient(ABC):
             endpoint: API 端点
             session: aiohttp 会话（可选）
             use_bearer_token: 是否使用 Bearer Token 认证（默认为 True）
+            timeout: 超时时间（秒）- 已废弃，由服务器端控制
         
         Returns:
             响应 JSON
@@ -238,34 +302,61 @@ class BaseAPIClient(ABC):
             close_session = True
         
         try:
-            # 设置超时
-            timeout_obj = aiohttp.ClientTimeout(total=timeout) if timeout else None
-            async with session.get(url, headers=headers, timeout=timeout_obj) as response:
+            async with session.get(url, headers=headers) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     
+                    # 尝试解析 JSON 错误信息，提取关键内容
+                    error_message = error_text
+                    try:
+                        error_json = json.loads(error_text)
+                        # 尝试从多个常见位置提取错误信息
+                        if "error" in error_json:
+                            if isinstance(error_json["error"], dict):
+                                error_message = error_json["error"].get("message", error_text)
+                            else:
+                                error_message = str(error_json["error"])
+                        elif "message" in error_json:
+                            error_message = error_json["message"]
+                    except:
+                        # 如果不是 JSON，使用原始文本
+                        pass
+                    
                     # 针对常见错误状态码提供友好提示
-                    if response.status == 504:
+                    if response.status == 400:
                         raise RuntimeError(
-                            f"API 请求超时 (504 Gateway Timeout)\n"
-                            f"原因：服务器响应超时或该端点暂时不可用\n"
-                            f"建议：稍后重试"
+                            f"请求参数错误 (400 Bad Request)\n"
+                            f"API 返回错误：{error_message}\n"
+                            f"建议：检查请求参数"
                         )
-                    elif response.status == 503:
+                    elif response.status == 401:
                         raise RuntimeError(
-                            f"服务暂时不可用 (503 Service Unavailable)\n"
-                            f"原因：服务过载或维护中\n"
-                            f"建议：稍后重试"
+                            f"认证失败 (401 Unauthorized)\n"
+                            f"API 返回错误：{error_message}\n"
+                            f"建议：检查 API 密钥"
                         )
                     elif response.status == 429:
                         raise RuntimeError(
                             f"请求频率超限 (429 Too Many Requests)\n"
-                            f"原因：API 配额用尽或请求过于频繁\n"
+                            f"API 返回错误：{error_message}\n"
                             f"建议：等待一段时间后重试"
+                        )
+                    elif response.status == 503:
+                        raise RuntimeError(
+                            f"服务暂时不可用 (503 Service Unavailable)\n"
+                            f"API 返回错误：{error_message}\n"
+                            f"建议：稍后重试"
+                        )
+                    elif response.status == 504:
+                        raise RuntimeError(
+                            f"API 请求超时 (504 Gateway Timeout)\n"
+                            f"API 返回错误：{error_message}\n"
+                            f"建议：稍后重试"
                         )
                     else:
                         raise RuntimeError(
-                            f"API 请求失败 (状态码: {response.status}): {error_text}"
+                            f"API 请求失败 (状态码: {response.status})\n"
+                            f"API 返回错误：{error_message}"
                         )
                 
                 return await response.json()

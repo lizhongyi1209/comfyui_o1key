@@ -253,9 +253,9 @@ class BatchNanoBananaPro:
                             images = scaled_images
                         
                         all_images.append(images)
-                        print(f"BatchNanoBananaPro: 文件夹{i} 加载了 {len(images)} 张图片")
                     else:
-                        print(f"BatchNanoBananaPro: 文件夹{i} 为空或没有有效图片")
+                        # 空文件夹，静默跳过
+                        pass
                 except ValueError as e:
                     print(f"BatchNanoBananaPro: 文件夹{i} 加载失败 - {e}")
         
@@ -617,9 +617,6 @@ class BatchNanoBananaPro:
                             )
                         )
             
-            if manual_images:
-                print(f"BatchNanoBananaPro: 加载了 {len(manual_images)} 张参考图")
-            
             # 验证是否有图片
             total_folder_images = sum(len(lst) for lst in image_lists)
             total_manual_images = len(manual_images)
@@ -628,14 +625,15 @@ class BatchNanoBananaPro:
                 raise ValueError("未找到任何图片，请检查文件夹路径或提供参考图")
             
             # 创建配对
-            print(f"BatchNanoBananaPro: 使用 {图片配对模式} 模式创建配对...")
             pairs = self._create_pairs(image_lists, 图片配对模式, manual_images if manual_images else None)
             
             if not pairs:
                 raise ValueError("配对结果为空，请检查输入")
             
             total_tasks = len(pairs)
-            print(f"BatchNanoBananaPro: 共 {total_tasks} 组配对")
+            
+            # 打印首行概览
+            print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 | 共 {total_tasks} 任务")
             
             # 创建 ComfyUI 原生进度条
             pbar = None
@@ -650,8 +648,6 @@ class BatchNanoBananaPro:
                     raise ValueError(f"初始化 API 客户端失败: {str(e)}")
             
             # 执行批量生成
-            print("BatchNanoBananaPro: 开始批量生成...")
-            
             # 在新线程中运行异步代码，避免事件循环冲突
             def run_async_in_thread():
                 loop = asyncio.new_event_loop()
@@ -686,9 +682,15 @@ class BatchNanoBananaPro:
             
             elapsed = time.time() - start_time
             
+            # 格式化时间
+            if elapsed < 1:
+                time_str = f"{elapsed:.3f}s"
+            else:
+                time_str = f"{elapsed:.2f}s"
+            
             # 精简统计信息
-            print("=" * 50)
-            print(f"BatchNanoBananaPro 处理完成 | 总耗时: {elapsed:.2f}s | 成功: {success_count}/{total_tasks} | 生成: {total_generated}张")
+            print("=" * 60)
+            print(f"完成！总耗时 {time_str} | 成功: {success_count}/{total_tasks} | 生成 {total_generated} 张")
             print(f"保存路径: {保存路径}")
             
             # 失败详情（如果有）
@@ -701,6 +703,9 @@ class BatchNanoBananaPro:
                     failed_str += f"... (共{len(failed_results)}个)"
                 # 显示第一个失败原因作为示例
                 first_error = failed_results[0].get('error', '未知错误')
+                # 截取错误信息的第一行
+                if '\n' in first_error:
+                    first_error = first_error.split('\n')[0]
                 print(f"失败 {len(failed_results)}个: 任务{failed_str} - {first_error}")
             
             # 收集所有生成的图片

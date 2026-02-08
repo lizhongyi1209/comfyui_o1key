@@ -226,14 +226,10 @@ class GeminiFlashClient(BaseAPIClient):
             video_data=video_data
         )
         
-        # 根据是否有视频设置超时（视频处理需要更长时间）
-        timeout = 300 if video_data else 180
-        
         response = await self.request_async(
             endpoint, 
             request_body, 
-            session, 
-            timeout=timeout
+            session
         )
         
         return self.parse_response(response)

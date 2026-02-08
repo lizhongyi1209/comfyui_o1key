@@ -26,24 +26,6 @@ class GeminiAPIClient(BaseAPIClient):
     用于调用 Gemini 3 Pro 模型进行图像生成
     """
     
-    @staticmethod
-    def get_timeout_by_resolution(resolution: str) -> int:
-        """
-        根据分辨率获取超时时间
-        
-        Args:
-            resolution: 分辨率（1K, 2K, 4K）
-        
-        Returns:
-            超时时间（秒）
-        """
-        timeout_map = {
-            "1K": 180,  # 3 分钟
-            "2K": 300,  # 5 分钟
-            "4K": 360   # 6 分钟
-        }
-        return timeout_map.get(resolution, 300)  # 默认 5 分钟
-    
     def __init__(self, api_key: Optional[str] = None):
         """
         初始化客户端
@@ -181,7 +163,7 @@ class GeminiAPIClient(BaseAPIClient):
         self, 
         response: Dict[str, Any],
         session: Optional[aiohttp.ClientSession] = None
-    ) -> List[Image.Image]:
+    ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
         异步解析 API 响应，提取生成的图像
         
@@ -190,11 +172,22 @@ class GeminiAPIClient(BaseAPIClient):
             session: aiohttp 会话（用于下载图片）
         
         Returns:
-            图像列表
+            (图像列表, 格式信息字典)
+            格式信息包含: type (base64/url), size, resolution, download_speed (仅URL)
         
         Raises:
             RuntimeError: 解析失败或 API 拒绝时
         """
+        
+        # 初始化格式信息
+        format_info = {
+            "type": None,  # "base64" or "url"
+            "size": 0,
+            "resolution": None,
+            "download_speed": None
+        }
+        
+        candidates = response.get("candidates", [])
         
         # ========== 错误检测（按优先级顺序）==========
         
@@ -295,11 +288,11 @@ class GeminiAPIClient(BaseAPIClient):
             close_session = True
         
         try:
-            for candidate in candidates:
+            for candidate_idx, candidate in enumerate(candidates):
                 content = candidate.get("content", {})
                 parts = content.get("parts", [])
                 
-                for part in parts:
+                for part_idx, part in enumerate(parts):
                     # 方式1: inline_data 或 inlineData (base64)
                     # 兼容两种命名方式：蛇形（inline_data）和驼峰（inlineData）
                     inline_data_key = None
@@ -316,6 +309,12 @@ class GeminiAPIClient(BaseAPIClient):
                         if img_data:
                             img = decode_base64_to_pil(img_data)
                             images.append(img)
+                            
+                            # 记录格式信息
+                            if format_info["type"] is None:
+                                format_info["type"] = "base64"
+                                format_info["size"] = len(img_data) * 3 / 4  # Base64 解码后的字节数
+                                format_info["resolution"] = f"{img.size[0]}x{img.size[1]}"
                     
                     # 方式2: text 中的 URL - 改为异步下载
                     elif "text" in part:
@@ -334,44 +333,52 @@ class GeminiAPIClient(BaseAPIClient):
                             urls = re.findall(url_pattern_plain, text)
                         
                         if urls:
-                            for url in urls:
+                            for url_idx, url in enumerate(urls):
                                 try:
-                                    # 使用 aiohttp 异步下载，支持更大的超时
+                                    # 使用 aiohttp 异步下载
                                     download_start = time.time()
-                                    timeout = aiohttp.ClientTimeout(total=120)
-                                    async with session.get(url, timeout=timeout) as img_response:
+                                    async with session.get(url) as img_response:
                                         if img_response.status == 200:
                                             img_data = await img_response.read()
                                             download_time = time.time() - download_start
-                                            img_size_mb = len(img_data) / 1024 / 1024
-                                            speed_mbps = img_size_mb / download_time if download_time > 0 else 0
-                                            # print(f"🔽 图片下载: {img_size_mb:.2f}MB 耗时 {download_time:.2f}s 速度 {speed_mbps:.2f}MB/s")
+                                            img_size = len(img_data)
+                                            speed = img_size / download_time if download_time > 0 else 0
+                                            
                                             img = Image.open(BytesIO(img_data))
                                             images.append(img)
-                                        else:
-                                            print(f"Nano Banana Pro: 下载图片失败 - HTTP {img_response.status}")
+                                            
+                                            # 记录格式信息（只记录第一张）
+                                            if format_info["type"] is None:
+                                                format_info["type"] = "url"
+                                                format_info["size"] = img_size
+                                                format_info["resolution"] = f"{img.size[0]}x{img.size[1]}"
+                                                format_info["download_speed"] = speed
                                 except Exception as e:
-                                    print(f"Nano Banana Pro: 下载图片失败 - {str(e)}")
+                                    pass  # 静默失败，继续尝试其他URL
                     
                     # 方式3: 直接的 URL 字段 - 也改为异步
                     elif "imageUrl" in part or "url" in part:
                         url = part.get("imageUrl") or part.get("url")
                         try:
                             download_start = time.time()
-                            timeout = aiohttp.ClientTimeout(total=120)
-                            async with session.get(url, timeout=timeout) as img_response:
+                            async with session.get(url) as img_response:
                                 if img_response.status == 200:
                                     img_data = await img_response.read()
                                     download_time = time.time() - download_start
-                                    img_size_mb = len(img_data) / 1024 / 1024
-                                    speed_mbps = img_size_mb / download_time if download_time > 0 else 0
-                                    # print(f"🔽 图片下载: {img_size_mb:.2f}MB 耗时 {download_time:.2f}s 速度 {speed_mbps:.2f}MB/s")
+                                    img_size = len(img_data)
+                                    speed = img_size / download_time if download_time > 0 else 0
+                                    
                                     img = Image.open(BytesIO(img_data))
                                     images.append(img)
-                                else:
-                                    print(f"Nano Banana Pro: 下载图片失败 - HTTP {img_response.status}")
+                                    
+                                    # 记录格式信息
+                                    if format_info["type"] is None:
+                                        format_info["type"] = "url"
+                                        format_info["size"] = img_size
+                                        format_info["resolution"] = f"{img.size[0]}x{img.size[1]}"
+                                        format_info["download_speed"] = speed
                         except Exception as e:
-                            print(f"Nano Banana Pro: 下载图片失败 - {str(e)}")
+                            pass  # 静默失败
         
         except Exception as e:
             raise RuntimeError(f"解析 API 响应失败: {str(e)}")
@@ -396,7 +403,7 @@ class GeminiAPIClient(BaseAPIClient):
         if not images:
             raise RuntimeError("API 响应中未找到生成的图像")
         
-        return images
+        return images, format_info
     
     async def generate_single_async(
         self,
@@ -405,10 +412,12 @@ class GeminiAPIClient(BaseAPIClient):
         resolution: str,
         aspect_ratio: str,
         images: Optional[List[Image.Image]] = None,
-        session=None
-    ) -> List[Image.Image]:
+        session=None,
+        task_index: Optional[int] = None,
+        total_tasks: Optional[int] = None
+    ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
-        单次异步生成请求
+        单次异步生成请求（带耗时统计和极简日志）
         
         Args:
             prompt: 提示词
@@ -417,10 +426,21 @@ class GeminiAPIClient(BaseAPIClient):
             aspect_ratio: 宽高比
             images: 输入图像列表
             session: aiohttp 会话
+            task_index: 任务索引（用于批量任务）
+            total_tasks: 总任务数（用于批量任务）
         
         Returns:
-            生成的图像列表
+            (生成的图像列表, 计时信息字典)
         """
+        import json
+        
+        total_start = time.time()
+        
+        # 任务前缀（用于批量任务，使用 #N 格式避免与阶段 [n/4] 混淆）
+        task_prefix = f"#{task_index} " if task_index and total_tasks else ""
+        
+        # ========== 1. 构建请求 ==========
+        build_start = time.time()
         endpoint = self.get_endpoint(model=model, resolution=resolution)
         request_body = self.build_request_body(
             prompt=prompt,
@@ -428,13 +448,109 @@ class GeminiAPIClient(BaseAPIClient):
             aspect_ratio=aspect_ratio,
             resolution=resolution
         )
+        build_time = time.time() - build_start
         
-        # 根据分辨率获取超时时间
-        timeout = self.get_timeout_by_resolution(resolution)
+        # 计算请求体大小
+        request_size = len(json.dumps(request_body).encode('utf-8'))
         
-        response = await self.request_async(endpoint, request_body, session, timeout=timeout)
-        # 使用异步解析方法，传入 session 以实现并发图片下载
-        return await self.parse_response_async(response, session)
+        # 格式化大小
+        if request_size < 1024 * 1024:
+            size_str = f"{request_size / 1024:.2f}KB"
+        else:
+            size_str = f"{request_size / (1024 * 1024):.2f}MB"
+        
+        # 格式化时间
+        if build_time < 1:
+            time_str = f"{build_time:.3f}s"
+        else:
+            time_str = f"{build_time:.2f}s"
+        
+        print(f"{task_prefix}[1/4] 请求构建 ✓ {time_str} | {size_str}")
+        
+        # ========== 2. 发送网络请求 ==========
+        request_start = time.time()
+        
+        try:
+            response = await self.request_async(endpoint, request_body, session)
+        except Exception as e:
+            request_time = time.time() - request_start
+            req_time_str = f"{request_time:.3f}s" if request_time < 1 else f"{request_time:.2f}s"
+            error_first_line = str(e).split('\n')[0]
+            print(f"{task_prefix}[2/4] API 请求 ✗ {req_time_str} | {error_first_line}")
+            raise
+        
+        request_time = time.time() - request_start
+        
+        # 提取计时信息
+        timing = response.get("_timing", {})
+        connect_time = timing.get("connect_time", 0)
+        download_time = timing.get("download_time", 0)
+        response_size = timing.get("response_size", 0)
+        
+        # 格式化响应大小
+        if response_size < 1024 * 1024:
+            resp_size_str = f"{response_size / 1024:.2f}KB"
+        else:
+            resp_size_str = f"{response_size / (1024 * 1024):.2f}MB"
+        
+        # 格式化总时间
+        if request_time < 1:
+            req_time_str = f"{request_time:.3f}s"
+        else:
+            req_time_str = f"{request_time:.2f}s"
+        
+        print(f"{task_prefix}[2/4] API 请求 ✓ {req_time_str}")
+        print(f"  ├─ 连接: {connect_time:.3f}s")
+        print(f"  └─ 响应: {download_time:.3f}s ({resp_size_str})")
+        
+        # ========== 3. 解析响应 ==========
+        parse_start = time.time()
+        
+        try:
+            result_images, format_info = await self.parse_response_async(response, session)
+        except Exception as e:
+            parse_time = time.time() - parse_start
+            parse_time_str = f"{parse_time:.3f}s" if parse_time < 1 else f"{parse_time:.2f}s"
+            error_first_line = str(e).split('\n')[0]
+            print(f"{task_prefix}[3/4] 响应解析 ✗ {parse_time_str} | {error_first_line}")
+            raise
+        
+        parse_time = time.time() - parse_start
+        
+        # 格式化解析时间
+        if parse_time < 1:
+            parse_time_str = f"{parse_time:.3f}s"
+        else:
+            parse_time_str = f"{parse_time:.2f}s"
+        
+        # 格式化图像大小
+        img_size = format_info.get("size", 0)
+        if img_size < 1024 * 1024:
+            img_size_str = f"{img_size / 1024:.2f}KB"
+        else:
+            img_size_str = f"{img_size / (1024 * 1024):.2f}MB"
+        
+        # 构建阶段3日志
+        resolution_str = format_info.get("resolution", "未知")
+        if format_info.get("type") == "base64":
+            print(f"{task_prefix}[3/4] 响应解析 ✓ {parse_time_str} | Base64 {img_size_str} → {resolution_str}")
+        elif format_info.get("type") == "url":
+            speed = format_info.get("download_speed", 0)
+            speed_str = f"{speed / (1024 * 1024):.2f}MB/s"
+            print(f"{task_prefix}[3/4] 响应解析 ✓ {parse_time_str} | URL → 下载 {img_size_str} ({speed_str}) → {resolution_str}")
+        else:
+            print(f"{task_prefix}[3/4] 响应解析 ✓ {parse_time_str} | {resolution_str}")
+        
+        # 返回结果和计时信息
+        total_time = time.time() - total_start
+        timing_info = {
+            "build_time": build_time,
+            "request_time": request_time,
+            "parse_time": parse_time,
+            "total_time": total_time
+        }
+        
+        return result_images, timing_info
     
     async def generate_batch_async(
         self,
@@ -482,19 +598,21 @@ class GeminiAPIClient(BaseAPIClient):
                         resolution=resolution,
                         aspect_ratio=aspect_ratio,
                         images=images,
-                        session=session
+                        session=session,
+                        task_index=i + 1,
+                        total_tasks=batch_size
                     ),
                     name=f"task_{i}"
                 )
                 tasks.append(task)
             
             # 使用 as_completed 实时获取完成的任务
-            for coro in asyncio.as_completed(tasks):
+            for i, coro in enumerate(asyncio.as_completed(tasks)):
                 completed += 1
                 try:
-                    result = await coro
-                    if result:
-                        all_images.append(result[0])
+                    result_images, timing_info = await coro
+                    if result_images:
+                        all_images.append(result_images[0])
                         success_count += 1
                         if progress_callback:
                             progress_callback(completed, batch_size, True, None)
@@ -601,7 +719,9 @@ class GeminiAPIClient(BaseAPIClient):
                             resolution=resolution,
                             aspect_ratio=aspect_ratio,
                             images=images,
-                            session=session
+                            session=session,
+                            task_index=task_idx + 1,
+                            total_tasks=total_tasks
                         ),
                         name=f"task_{task_idx}"
                     )
@@ -612,9 +732,9 @@ class GeminiAPIClient(BaseAPIClient):
             for coro in asyncio.as_completed(tasks):
                 completed += 1
                 try:
-                    result = await coro
-                    if result:
-                        all_images.append(result[0])
+                    result_images, timing_info = await coro
+                    if result_images:
+                        all_images.append(result_images[0])
                         success_count += 1
                         if progress_callback:
                             progress_callback(completed, total_tasks, True, None)
