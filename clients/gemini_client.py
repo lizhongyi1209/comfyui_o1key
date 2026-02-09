@@ -17,7 +17,7 @@ from .base_client import BaseAPIClient
 
 
 # API 基础配置
-API_BASE_URL = "https://api.o1key.com"
+API_BASE_URL = "https://vip.o1key.com"
 
 
 class GeminiAPIClient(BaseAPIClient):
