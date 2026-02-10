@@ -37,13 +37,12 @@ class GoogleGemini:
     功能：
     - 支持多个 Gemini Flash 模型
     - 支持图片和视频输入
-    - 支持系统指令
-    - 支持不同思考深度（不思考/高）
-    - 输出生成的文本内容
+    - 支持不同思考等级（不思考/低/中/高）- 通过动态端点控制
+    - 输出生成的文本内容（主要内容 + 思考内容）
     """
     
-    # 支持的思考深度选项
-    THINKING_DEPTHS = ["不思考", "高"]
+    # 支持的思考等级选项
+    THINKING_LEVELS = ["不思考", "低", "中", "高"]
     
     def __init__(self):
         """初始化节点"""
@@ -67,15 +66,11 @@ class GoogleGemini:
                     "default": "",
                     "multiline": True
                 }),
-                "思考深度": (cls.THINKING_DEPTHS, {
+                "思考等级": (cls.THINKING_LEVELS, {
                     "default": "不思考"
                 })
             },
             "optional": {
-                "系统指令": ("STRING", {
-                    "default": "",
-                    "multiline": True
-                }),
                 "图片": ("IMAGE",),
                 "视频": ("VIDEO",)
             }
@@ -220,8 +215,7 @@ class GoogleGemini:
         self,
         模型: str,
         提示词: str,
-        思考深度: str,
-        系统指令: Optional[str] = None,
+        思考等级: str,
         图片: Optional[torch.Tensor] = None,
         视频=None
     ) -> Tuple[str]:
@@ -231,13 +225,12 @@ class GoogleGemini:
         Args:
             模型: 使用的模型名称
             提示词: 用户提示词
-            思考深度: 思考深度选项
-            系统指令: 系统级指令
+            思考等级: 思考等级选项
             图片: 输入图片
             视频: 输入视频
         
         Returns:
-            生成的文本 (STRING,)
+            (主要内容, 思考内容)
         """
         start_time = time.time()
         
@@ -270,14 +263,15 @@ class GoogleGemini:
             
             print(f"Google Gemini: 模型 = {模型}")
             print(f"Google Gemini: 多模态输入 ({', '.join(input_desc)})")
-            print(f"Google Gemini: 思考深度 = {思考深度}")
+            print(f"Google Gemini: 思考等级 = {思考等级}")
             print(f"Google Gemini: 发送请求...")
             
-            # 获取端点和构建请求体
-            endpoint = self.client.get_endpoint(model=模型, thinking_depth=思考深度)
+            # 获取动态端点和构建请求体
+            endpoint = self.client.get_endpoint(model=模型, thinking_level=思考等级)
             request_body = self.client.build_request_body(
                 prompt=提示词,
-                system_instruction=系统指令,
+                model=模型,
+                thinking_level=思考等级,
                 image_data=image_data,
                 video_data=video_data
             )

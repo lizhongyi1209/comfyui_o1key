@@ -401,7 +401,7 @@ pil_image = decode_base64_to_pil(b64_str)
 ### 配置管理 (utils/config.py)
 
 ```python
-from ..utils.config import get_api_key, get_api_key_or_raise, load_config
+from ..utils.config import get_api_key, get_api_key_or_raise, load_config, get_api_base_url
 
 # 获取 API 密钥（返回 None 如果未找到）
 api_key = get_api_key("O1KEY_API_KEY")
@@ -409,8 +409,62 @@ api_key = get_api_key("O1KEY_API_KEY")
 # 获取 API 密钥（抛出异常如果未找到）
 api_key = get_api_key_or_raise("O1KEY_API_KEY")
 
+# 获取 API 基础 URL（统一配置）
+base_url = get_api_base_url()  # 默认: https://vip.o1key.com
+
 # 加载完整配置
 config = load_config()
+```
+
+### API 基础 URL 配置
+
+所有 API 客户端都使用统一的基础 URL 配置，默认为 `https://vip.o1key.com`。
+
+#### 配置优先级
+
+1. **环境变量** `O1KEY_API_BASE_URL`（优先级最高）
+2. **.config 文件**中的 `O1KEY_API_BASE_URL` 配置项
+3. **默认值** `https://vip.o1key.com`（在 `utils/config.py` 中定义）
+
+#### 修改 API 地址
+
+**方法 1：修改默认值（影响所有用户）**
+
+编辑 `utils/config.py`：
+
+```python
+# 修改此常量
+DEFAULT_API_BASE_URL = "https://your-api-domain.com"
+```
+
+**方法 2：使用环境变量（推荐，不影响代码）**
+
+在系统环境变量中设置：
+```bash
+# Windows
+set O1KEY_API_BASE_URL=https://your-api-domain.com
+
+# Linux/Mac
+export O1KEY_API_BASE_URL=https://your-api-domain.com
+```
+
+**方法 3：在 .config 文件中配置**
+
+在插件根目录的 `.config` 文件中添加：
+```
+O1KEY_API_BASE_URL=https://your-api-domain.com
+```
+
+#### 使用示例
+
+所有客户端会自动使用统一配置：
+
+```python
+from ..utils.config import get_api_base_url
+
+# 获取当前配置的 API 地址
+base_url = get_api_base_url()
+print(f"当前 API 地址: {base_url}")
 ```
 
 ---

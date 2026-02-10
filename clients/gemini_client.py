@@ -12,12 +12,8 @@ import aiohttp
 from PIL import Image
 
 from ..utils.image_utils import encode_image_to_base64, decode_base64_to_pil
-from ..utils.config import get_api_key_or_raise
+from ..utils.config import get_api_key_or_raise, get_api_base_url
 from .base_client import BaseAPIClient
-
-
-# API 基础配置
-API_BASE_URL = "https://vip.o1key.com"
 
 
 class GeminiAPIClient(BaseAPIClient):
@@ -37,7 +33,7 @@ class GeminiAPIClient(BaseAPIClient):
             api_key = get_api_key_or_raise("O1KEY_API_KEY")
         
         super().__init__(
-            base_url=API_BASE_URL,
+            base_url=get_api_base_url(),
             api_key=api_key,
             max_request_size=20 * 1024 * 1024
         )

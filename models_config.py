@@ -81,10 +81,13 @@ GEMINI_MODELS = [
 GEMINI_FLASH_MODELS = [
     {
         "id": "gemini-3-flash-preview",
-        "description": "Gemini 3 Flash,快速多模态文本生成,支持图片和视频输入",
+        "description": "Gemini 3 Flash,快速多模态文本生成,支持动态思考等级端点",
         "enabled": True,
+        "endpoint_type": "dynamic",
         "endpoints": {
             "不思考": "/v1beta/models/gemini-3-flash-preview-nothinking:generateContent",
+            "低": "/v1beta/models/gemini-3-flash-preview-low:generateContent",
+            "中": "/v1beta/models/gemini-3-flash-preview-medium:generateContent",
             "高": "/v1beta/models/gemini-3-flash-preview-high:generateContent"
         }
     }
@@ -291,29 +294,33 @@ def is_flash_model_enabled(model_id: str) -> bool:
     return config.get("enabled", False)
 
 
-def get_flash_model_endpoint(model_id: str, thinking_depth: str = "不思考") -> Optional[str]:
+def get_flash_model_endpoint(model_id: str, thinking_level: Optional[str] = None) -> Optional[str]:
     """
     获取 Flash 模型的 API 端点
     
     Args:
         model_id: 模型 ID
-        thinking_depth: 思考深度 ("不思考" 或 "高")
+        thinking_level: 思考等级（用于动态端点模型）
     
     Returns:
         API 端点路径，如果未找到则返回 None
     
     Example:
-        >>> get_flash_model_endpoint("gemini-3-flash-preview", "不思考")
-        '/v1beta/models/gemini-3-flash-preview-nothinking:generateContent'
-        >>> get_flash_model_endpoint("gemini-3-flash-preview", "高")
-        '/v1beta/models/gemini-3-flash-preview-high:generateContent'
+        >>> get_flash_model_endpoint("gemini-3-flash-preview", "低")
+        '/v1beta/models/gemini-3-flash-preview-low:generateContent'
     """
     config = get_flash_model_config(model_id)
     if config is None:
         return None
     
-    endpoints = config.get("endpoints", {})
-    return endpoints.get(thinking_depth)
+    # 检查是否为动态端点
+    if config.get("endpoint_type") == "dynamic":
+        if thinking_level and "endpoints" in config:
+            return config["endpoints"].get(thinking_level)
+        return None
+    
+    # 返回固定端点（向后兼容）
+    return config.get("endpoint")
 
 
 def get_flash_model_description(model_id: str) -> str:
@@ -330,6 +337,54 @@ def get_flash_model_description(model_id: str) -> str:
     if config is None:
         return ""
     return config.get("description", "")
+
+
+# 已弃用：动态端点模式下不再需要这些函数
+# def get_flash_model_thinking_levels(model_id: str) -> List[str]:
+#     """
+#     获取 Flash 模型支持的思考等级列表
+#     
+#     Args:
+#         model_id: 模型 ID
+#     
+#     Returns:
+#         思考等级列表（中文），如果未找到则返回空列表
+#     
+#     Example:
+#         >>> get_flash_model_thinking_levels("gemini-3-flash-preview")
+#         ['默认', '最低', '低', '中', '高']
+#     """
+#     config = get_flash_model_config(model_id)
+#     if config is None:
+#         return []
+#     
+#     thinking_levels = config.get("thinking_levels", {})
+#     return list(thinking_levels.keys())
+
+
+# def get_thinking_level_value(model_id: str, thinking_level: str) -> Optional[str]:
+#     """
+#     获取思考等级对应的 API 参数值
+#     
+#     Args:
+#         model_id: 模型 ID
+#         thinking_level: 思考等级（中文）
+#     
+#     Returns:
+#         API 参数值（英文），如果未找到则返回 None
+#     
+#     Example:
+#         >>> get_thinking_level_value("gemini-3-flash-preview", "默认")
+#         'high'
+#         >>> get_thinking_level_value("gemini-3-flash-preview", "最低")
+#         'minimal'
+#     """
+#     config = get_flash_model_config(model_id)
+#     if config is None:
+#         return None
+#     
+#     thinking_levels = config.get("thinking_levels", {})
+#     return thinking_levels.get(thinking_level)
 
 
 # ============================================================
@@ -392,8 +447,9 @@ def validate_flash_models_config() -> None:
     验证 Flash 模型配置的完整性
     
     检查:
-    - 每个模型必须有 id, description, enabled, endpoints 字段
-    - endpoints 必须包含所有思考深度选项
+    - 每个模型必须有 id, description, enabled 字段
+    - 动态端点模型：必须有 endpoint_type="dynamic" 和 endpoints 字典
+    - 固定端点模型：必须有 endpoint 字段且格式正确
     - 至少有一个模型是启用的
     
     Raises:
@@ -402,8 +458,8 @@ def validate_flash_models_config() -> None:
     if not GEMINI_FLASH_MODELS:
         raise ValueError("GEMINI_FLASH_MODELS 列表不能为空")
     
-    required_fields = ["id", "description", "enabled", "endpoints"]
-    required_thinking_depths = ["不思考", "高"]
+    required_fields = ["id", "description", "enabled"]
+    required_thinking_levels = ["不思考", "低", "中", "高"]
     
     for i, model in enumerate(GEMINI_FLASH_MODELS):
         # 检查必需字段
@@ -411,22 +467,46 @@ def validate_flash_models_config() -> None:
             if field not in model:
                 raise ValueError(f"Flash 模型 #{i} 缺少必需字段: {field}")
         
-        # 检查 endpoints 字典
-        endpoints = model.get("endpoints", {})
-        if not isinstance(endpoints, dict):
-            raise ValueError(f"Flash 模型 {model['id']} 的 endpoints 必须是字典")
+        # 检查端点配置
+        endpoint_type = model.get("endpoint_type")
         
-        # 检查所有思考深度选项都有对应端点
-        for depth in required_thinking_depths:
-            if depth not in endpoints:
+        if endpoint_type == "dynamic":
+            # 动态端点模型
+            if "endpoints" not in model:
                 raise ValueError(
-                    f"Flash 模型 {model['id']} 的 endpoints 缺少 '{depth}' 思考深度"
+                    f"Flash 模型 {model['id']} 标记为动态端点，但缺少 'endpoints' 字段"
                 )
             
-            endpoint = endpoints[depth]
+            endpoints = model["endpoints"]
+            if not isinstance(endpoints, dict):
+                raise ValueError(
+                    f"Flash 模型 {model['id']} 的 endpoints 必须是字典"
+                )
+            
+            # 检查所有思考等级选项都有对应端点
+            for level in required_thinking_levels:
+                if level not in endpoints:
+                    raise ValueError(
+                        f"Flash 模型 {model['id']} 的 endpoints 缺少 '{level}' 等级"
+                    )
+                
+                endpoint = endpoints[level]
+                if not endpoint or not endpoint.startswith("/v1beta/models/"):
+                    raise ValueError(
+                        f"Flash 模型 {model['id']} 的思考等级 '{level}' 的端点 '{endpoint}' 格式不正确。"
+                        f"应以 '/v1beta/models/' 开头"
+                    )
+        else:
+            # 固定端点模型（向后兼容）
+            if "endpoint" not in model:
+                raise ValueError(
+                    f"Flash 模型 {model['id']} 缺少 'endpoint' 字段"
+                )
+            
+            endpoint = model.get("endpoint", "")
             if not endpoint or not endpoint.startswith("/v1beta/models/"):
                 raise ValueError(
-                    f"Flash 模型 {model['id']} 的端点 '{endpoint}' 格式不正确。"
+                    f"Flash 模型 {model['id']} 的 endpoint '{endpoint}' 格式不正确。"
                     f"应以 '/v1beta/models/' 开头"
                 )
     

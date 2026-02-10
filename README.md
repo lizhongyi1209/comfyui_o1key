@@ -38,14 +38,16 @@ pip install -r requirements.txt
 
 ### 获取 API 密钥
 
-1. 访问 [api.o1key.com](https://api.o1key.com)
+1. 访问 [vip.o1key.com](https://vip.o1key.com)
 2. 注册并获取 API 密钥
 
 ### 配置方式
 
-**Windows 用户（推荐）：**
+#### 配置 API 密钥（必需）
 
-设置系统环境变量：
+**方法一：环境变量（推荐）**
+
+**Windows 用户：**
 1. 右键 "此电脑" → 属性 → 高级系统设置 → 环境变量
 2. 在"用户变量"中新建：
    - 变量名：`O1KEY_API_KEY`
@@ -60,6 +62,35 @@ export O1KEY_API_KEY="你的API密钥"
 ```
 
 然后执行 `source ~/.bashrc` 并重启 ComfyUI。
+
+**方法二：配置文件**
+
+在插件目录下创建 `.config` 文件（参考 `.config.example`）：
+```
+O1KEY_API_KEY=你的API密钥
+```
+
+#### 配置 API 地址（可选）
+
+默认使用 `https://vip.o1key.com`，通常无需修改。
+
+如需自定义 API 地址，可通过以下方式：
+
+1. **环境变量**（推荐）：
+   ```bash
+   # Windows
+   set O1KEY_API_BASE_URL=https://your-api-domain.com
+   
+   # Linux/Mac
+   export O1KEY_API_BASE_URL=https://your-api-domain.com
+   ```
+
+2. **配置文件**：在 `.config` 中添加：
+   ```
+   O1KEY_API_BASE_URL=https://your-api-domain.com
+   ```
+
+3. **修改默认值**：编辑 `utils/config.py` 中的 `DEFAULT_API_BASE_URL` 常量
 
 ---
 

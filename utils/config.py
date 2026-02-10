@@ -12,6 +12,12 @@ PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE = os.path.join(PLUGIN_ROOT, ".config")
 
 
+# ============ API 基础配置 ============
+# 所有 API 客户端的统一基础 URL
+# 可通过环境变量 O1KEY_API_BASE_URL 覆盖
+DEFAULT_API_BASE_URL = "https://vip.o1key.com"
+
+
 def load_config(config_path: Optional[str] = None) -> Dict[str, str]:
     """
     从配置文件加载所有配置项
@@ -112,3 +118,33 @@ def get_api_key_or_raise(key_name: str = "O1KEY_API_KEY") -> str:
         raise ValueError("未授权！")
     
     return api_key
+
+
+def get_api_base_url() -> str:
+    """
+    获取 API 基础 URL
+    优先级：环境变量 O1KEY_API_BASE_URL > .config 文件 > 默认值
+    
+    Returns:
+        API 基础 URL 字符串
+    
+    Example:
+        >>> base_url = get_api_base_url()
+        >>> print(base_url)
+        'https://vip.o1key.com'
+    """
+    # 1. 优先从环境变量读取
+    base_url = os.environ.get("O1KEY_API_BASE_URL")
+    
+    if base_url:
+        return base_url.rstrip('/')  # 移除末尾的斜杠
+    
+    # 2. 从 .config 文件读取
+    config = load_config()
+    base_url = config.get("O1KEY_API_BASE_URL")
+    
+    if base_url:
+        return base_url.rstrip('/')
+    
+    # 3. 使用默认值
+    return DEFAULT_API_BASE_URL

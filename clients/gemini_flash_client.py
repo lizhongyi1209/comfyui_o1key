@@ -8,13 +8,12 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise
-from ..models_config import get_flash_model_endpoint, get_enabled_flash_models
+from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..models_config import (
+    get_flash_model_endpoint,
+    get_enabled_flash_models
+)
 from .base_client import BaseAPIClient
-
-
-# API 基础配置
-API_BASE_URL = "https://api.o1key.com"
 
 
 class GeminiFlashClient(BaseAPIClient):
@@ -24,8 +23,7 @@ class GeminiFlashClient(BaseAPIClient):
     
     特点：
     - 支持图片和视频输入
-    - 支持系统指令
-    - 支持不同思考深度
+    - 支持动态思考等级端点（不思考/低/中/高）
     """
     
     def __init__(self, api_key: Optional[str] = None):
@@ -39,7 +37,7 @@ class GeminiFlashClient(BaseAPIClient):
             api_key = get_api_key_or_raise("O1KEY_API_KEY")
         
         super().__init__(
-            base_url=API_BASE_URL,
+            base_url=get_api_base_url(),
             api_key=api_key,
             max_request_size=20 * 1024 * 1024  # 20MB
         )
@@ -47,36 +45,37 @@ class GeminiFlashClient(BaseAPIClient):
     def get_endpoint(
         self, 
         model: str = "gemini-3-flash-preview",
-        thinking_depth: str = "不思考", 
+        thinking_level: str = "不思考",
         **kwargs
     ) -> str:
         """
-        根据模型和思考深度获取 API 端点
+        根据模型和思考等级获取 API 端点
         
         Args:
             model: 模型名称
-            thinking_depth: 思考深度 ("不思考" 或 "高")
+            thinking_level: 思考等级（不思考/低/中/高）
         
         Returns:
             API 端点路径
         """
-        endpoint = get_flash_model_endpoint(model, thinking_depth)
+        endpoint = get_flash_model_endpoint(model, thinking_level)
         
         if endpoint is None:
             # 回退到默认端点
             default_models = get_enabled_flash_models()
             if default_models:
-                endpoint = get_flash_model_endpoint(default_models[0], thinking_depth)
+                endpoint = get_flash_model_endpoint(default_models[0], thinking_level)
         
         if endpoint is None:
-            raise ValueError(f"无法获取模型 '{model}' 的端点 (思考深度: {thinking_depth})")
+            raise ValueError(f"无法获取模型 '{model}' (思考等级: {thinking_level}) 的端点")
         
         return endpoint
     
     def build_request_body(
         self,
         prompt: str = "",
-        system_instruction: Optional[str] = None,
+        model: str = "gemini-3-flash-preview",
+        thinking_level: str = "不思考",
         image_data: Optional[List[Dict[str, str]]] = None,
         video_data: Optional[Dict[str, str]] = None,
         **kwargs
@@ -86,7 +85,8 @@ class GeminiFlashClient(BaseAPIClient):
         
         Args:
             prompt: 用户提示词
-            system_instruction: 系统指令（可选）
+            model: 模型名称
+            thinking_level: 思考等级（不思考/低/中/高）- 通过动态端点控制，不需要在请求体中传递
             image_data: 图片数据列表，每个元素包含 mime_type 和 data
             video_data: 视频数据，包含 mime_type 和 data
         
@@ -127,13 +127,7 @@ class GeminiFlashClient(BaseAPIClient):
             ]
         }
         
-        # 添加系统指令（如果有）
-        if system_instruction and system_instruction.strip():
-            request_body["system_instruction"] = {
-                "parts": [
-                    {"text": system_instruction}
-                ]
-            }
+        # 注意：思考等级现在通过动态端点控制，不再需要 thinkingConfig
         
         return request_body
     
@@ -197,8 +191,7 @@ class GeminiFlashClient(BaseAPIClient):
         self,
         prompt: str,
         model: str = "gemini-3-flash-preview",
-        thinking_depth: str = "不思考",
-        system_instruction: Optional[str] = None,
+        thinking_level: str = "不思考",
         image_data: Optional[List[Dict[str, str]]] = None,
         video_data: Optional[Dict[str, str]] = None,
         session: Optional[aiohttp.ClientSession] = None
@@ -209,8 +202,7 @@ class GeminiFlashClient(BaseAPIClient):
         Args:
             prompt: 用户提示词
             model: 模型名称
-            thinking_depth: 思考深度
-            system_instruction: 系统指令
+            thinking_level: 思考等级（不思考/低/中/高）
             image_data: 图片数据列表
             video_data: 视频数据
             session: aiohttp 会话
@@ -218,10 +210,11 @@ class GeminiFlashClient(BaseAPIClient):
         Returns:
             生成的文本内容
         """
-        endpoint = self.get_endpoint(model=model, thinking_depth=thinking_depth)
+        endpoint = self.get_endpoint(model=model, thinking_level=thinking_level)
         request_body = self.build_request_body(
             prompt=prompt,
-            system_instruction=system_instruction,
+            model=model,
+            thinking_level=thinking_level,
             image_data=image_data,
             video_data=video_data
         )
@@ -238,8 +231,7 @@ class GeminiFlashClient(BaseAPIClient):
         self,
         prompt: str,
         model: str = "gemini-3-flash-preview",
-        thinking_depth: str = "不思考",
-        system_instruction: Optional[str] = None,
+        thinking_level: str = "不思考",
         image_data: Optional[List[Dict[str, str]]] = None,
         video_data: Optional[Dict[str, str]] = None
     ) -> str:
@@ -249,8 +241,7 @@ class GeminiFlashClient(BaseAPIClient):
         Args:
             prompt: 用户提示词
             model: 模型名称
-            thinking_depth: 思考深度
-            system_instruction: 系统指令
+            thinking_level: 思考等级（不思考/低/中/高）
             image_data: 图片数据列表
             video_data: 视频数据
         
@@ -260,8 +251,7 @@ class GeminiFlashClient(BaseAPIClient):
         coro = self.generate_async(
             prompt=prompt,
             model=model,
-            thinking_depth=thinking_depth,
-            system_instruction=system_instruction,
+            thinking_level=thinking_level,
             image_data=image_data,
             video_data=video_data
         )
