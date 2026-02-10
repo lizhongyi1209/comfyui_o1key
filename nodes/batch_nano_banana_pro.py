@@ -383,7 +383,9 @@ class BatchNanoBananaPro:
                     session=session
                 )
                 if gen_result:
-                    generated_images.extend(gen_result)
+                    # 正确解包元组：第一个元素是图像列表，第二个是计时信息
+                    images_list, timing_info = gen_result
+                    generated_images.extend(images_list)
             except Exception as e:
                 error_msg = str(e)
                 print(f"BatchNanoBananaPro: 任务 {task_index + 1} 生成失败 - {error_msg}")
@@ -688,9 +690,13 @@ class BatchNanoBananaPro:
             else:
                 time_str = f"{elapsed:.2f}s"
             
+            # 计算平均耗时
+            avg_time = elapsed / success_count if success_count > 0 else 0
+            avg_time_str = f"{avg_time:.1f}s/张" if success_count > 0 else "N/A"
+            
             # 精简统计信息
             print("=" * 60)
-            print(f"完成！总耗时 {time_str} | 成功: {success_count}/{total_tasks} | 生成 {total_generated} 张")
+            print(f"完成！总耗时 {time_str} | 成功: {success_count}/{total_tasks} | 生成 {total_generated} 张 | 平均 {avg_time_str}")
             print(f"保存路径: {保存路径}")
             
             # 失败详情（如果有）

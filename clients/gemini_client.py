@@ -417,7 +417,7 @@ class GeminiAPIClient(BaseAPIClient):
         total_tasks: Optional[int] = None
     ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
-        单次异步生成请求（带耗时统计和极简日志）
+        单次异步生成请求（极简单行日志）
         
         Args:
             prompt: 提示词
@@ -436,8 +436,8 @@ class GeminiAPIClient(BaseAPIClient):
         
         total_start = time.time()
         
-        # 任务前缀（用于批量任务，使用 #N 格式避免与阶段 [n/4] 混淆）
-        task_prefix = f"#{task_index} " if task_index and total_tasks else ""
+        # 任务前缀
+        task_prefix = f"[{task_index + 1}/{total_tasks}]" if task_index is not None and total_tasks else ""
         
         # ========== 1. 构建请求 ==========
         build_start = time.time()
@@ -452,20 +452,10 @@ class GeminiAPIClient(BaseAPIClient):
         
         # 计算请求体大小
         request_size = len(json.dumps(request_body).encode('utf-8'))
-        
-        # 格式化大小
         if request_size < 1024 * 1024:
             size_str = f"{request_size / 1024:.2f}KB"
         else:
             size_str = f"{request_size / (1024 * 1024):.2f}MB"
-        
-        # 格式化时间
-        if build_time < 1:
-            time_str = f"{build_time:.3f}s"
-        else:
-            time_str = f"{build_time:.2f}s"
-        
-        print(f"{task_prefix}[1/4] 请求构建 ✓ {time_str} | {size_str}")
         
         # ========== 2. 发送网络请求 ==========
         request_start = time.time()
@@ -474,34 +464,11 @@ class GeminiAPIClient(BaseAPIClient):
             response = await self.request_async(endpoint, request_body, session)
         except Exception as e:
             request_time = time.time() - request_start
-            req_time_str = f"{request_time:.3f}s" if request_time < 1 else f"{request_time:.2f}s"
             error_first_line = str(e).split('\n')[0]
-            print(f"{task_prefix}[2/4] API 请求 ✗ {req_time_str} | {error_first_line}")
+            print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → 失败: {error_first_line} ✗")
             raise
         
         request_time = time.time() - request_start
-        
-        # 提取计时信息
-        timing = response.get("_timing", {})
-        connect_time = timing.get("connect_time", 0)
-        download_time = timing.get("download_time", 0)
-        response_size = timing.get("response_size", 0)
-        
-        # 格式化响应大小
-        if response_size < 1024 * 1024:
-            resp_size_str = f"{response_size / 1024:.2f}KB"
-        else:
-            resp_size_str = f"{response_size / (1024 * 1024):.2f}MB"
-        
-        # 格式化总时间
-        if request_time < 1:
-            req_time_str = f"{request_time:.3f}s"
-        else:
-            req_time_str = f"{request_time:.2f}s"
-        
-        print(f"{task_prefix}[2/4] API 请求 ✓ {req_time_str}")
-        print(f"  ├─ 连接: {connect_time:.3f}s")
-        print(f"  └─ 响应: {download_time:.3f}s ({resp_size_str})")
         
         # ========== 3. 解析响应 ==========
         parse_start = time.time()
@@ -510,19 +477,13 @@ class GeminiAPIClient(BaseAPIClient):
             result_images, format_info = await self.parse_response_async(response, session)
         except Exception as e:
             parse_time = time.time() - parse_start
-            parse_time_str = f"{parse_time:.3f}s" if parse_time < 1 else f"{parse_time:.2f}s"
             error_first_line = str(e).split('\n')[0]
-            print(f"{task_prefix}[3/4] 响应解析 ✗ {parse_time_str} | {error_first_line}")
+            print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → 解析失败: {error_first_line} ✗")
             raise
         
         parse_time = time.time() - parse_start
         
-        # 格式化解析时间
-        if parse_time < 1:
-            parse_time_str = f"{parse_time:.3f}s"
-        else:
-            parse_time_str = f"{parse_time:.2f}s"
-        
+        # ========== 4. 格式化输出（单行） ==========
         # 格式化图像大小
         img_size = format_info.get("size", 0)
         if img_size < 1024 * 1024:
@@ -530,16 +491,18 @@ class GeminiAPIClient(BaseAPIClient):
         else:
             img_size_str = f"{img_size / (1024 * 1024):.2f}MB"
         
-        # 构建阶段3日志
-        resolution_str = format_info.get("resolution", "未知")
+        # 根据类型构建下载信息
         if format_info.get("type") == "base64":
-            print(f"{task_prefix}[3/4] 响应解析 ✓ {parse_time_str} | Base64 {img_size_str} → {resolution_str}")
+            download_info = f"Base64 {img_size_str} ({parse_time:.1f}s)"
         elif format_info.get("type") == "url":
             speed = format_info.get("download_speed", 0)
-            speed_str = f"{speed / (1024 * 1024):.2f}MB/s"
-            print(f"{task_prefix}[3/4] 响应解析 ✓ {parse_time_str} | URL → 下载 {img_size_str} ({speed_str}) → {resolution_str}")
+            speed_str = f"{speed / (1024 * 1024):.1f}MB/s"
+            download_info = f"URL {img_size_str} ({parse_time:.1f}s, {speed_str})"
         else:
-            print(f"{task_prefix}[3/4] 响应解析 ✓ {parse_time_str} | {resolution_str}")
+            download_info = f"{img_size_str}"
+        
+        # 单行输出
+        print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → {download_info} ✓")
         
         # 返回结果和计时信息
         total_time = time.time() - total_start
@@ -547,7 +510,8 @@ class GeminiAPIClient(BaseAPIClient):
             "build_time": build_time,
             "request_time": request_time,
             "parse_time": parse_time,
-            "total_time": total_time
+            "total_time": total_time,
+            "format_type": format_info.get("type", "unknown")
         }
         
         return result_images, timing_info
