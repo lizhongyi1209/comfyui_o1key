@@ -78,6 +78,7 @@ class GeminiFlashClient(BaseAPIClient):
         thinking_level: str = "不思考",
         image_data: Optional[List[Dict[str, str]]] = None,
         video_data: Optional[Dict[str, str]] = None,
+        document_data: Optional[Dict[str, str]] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -89,6 +90,7 @@ class GeminiFlashClient(BaseAPIClient):
             thinking_level: 思考等级（不思考/低/中/高）- 通过动态端点控制，不需要在请求体中传递
             image_data: 图片数据列表，每个元素包含 mime_type 和 data
             video_data: 视频数据，包含 mime_type 和 data
+            document_data: 文档数据，包含 mime_type 和 data
         
         Returns:
             请求体字典
@@ -115,6 +117,15 @@ class GeminiFlashClient(BaseAPIClient):
                 "inline_data": {
                     "mime_type": video_data["mime_type"],
                     "data": video_data["data"]
+                }
+            })
+        
+        # 添加文档部分（如果有）
+        if document_data:
+            parts.append({
+                "inline_data": {
+                    "mime_type": document_data["mime_type"],
+                    "data": document_data["data"]
                 }
             })
         
@@ -194,6 +205,7 @@ class GeminiFlashClient(BaseAPIClient):
         thinking_level: str = "不思考",
         image_data: Optional[List[Dict[str, str]]] = None,
         video_data: Optional[Dict[str, str]] = None,
+        document_data: Optional[Dict[str, str]] = None,
         session: Optional[aiohttp.ClientSession] = None
     ) -> str:
         """
@@ -205,6 +217,7 @@ class GeminiFlashClient(BaseAPIClient):
             thinking_level: 思考等级（不思考/低/中/高）
             image_data: 图片数据列表
             video_data: 视频数据
+            document_data: 文档数据
             session: aiohttp 会话
         
         Returns:
@@ -216,7 +229,8 @@ class GeminiFlashClient(BaseAPIClient):
             model=model,
             thinking_level=thinking_level,
             image_data=image_data,
-            video_data=video_data
+            video_data=video_data,
+            document_data=document_data
         )
         
         response = await self.request_async(
@@ -233,7 +247,8 @@ class GeminiFlashClient(BaseAPIClient):
         model: str = "gemini-3-flash-preview",
         thinking_level: str = "不思考",
         image_data: Optional[List[Dict[str, str]]] = None,
-        video_data: Optional[Dict[str, str]] = None
+        video_data: Optional[Dict[str, str]] = None,
+        document_data: Optional[Dict[str, str]] = None
     ) -> str:
         """
         同步生成文本（用于 ComfyUI 节点）
@@ -244,6 +259,7 @@ class GeminiFlashClient(BaseAPIClient):
             thinking_level: 思考等级（不思考/低/中/高）
             image_data: 图片数据列表
             video_data: 视频数据
+            document_data: 文档数据
         
         Returns:
             生成的文本内容
@@ -253,7 +269,8 @@ class GeminiFlashClient(BaseAPIClient):
             model=model,
             thinking_level=thinking_level,
             image_data=image_data,
-            video_data=video_data
+            video_data=video_data,
+            document_data=document_data
         )
         
         return self.run_async_in_thread(coro)

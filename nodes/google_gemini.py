@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
+from ..utils.file_types import FileData
 from ..clients.gemini_flash_client import GeminiFlashClient
 from ..models_config import get_enabled_flash_models
 
@@ -36,7 +37,7 @@ class GoogleGemini:
     
     功能：
     - 支持多个 Gemini Flash 模型
-    - 支持图片和视频输入
+    - 支持图片、视频和文件输入
     - 支持不同思考等级（不思考/低/中/高）- 通过动态端点控制
     - 输出生成的文本内容（主要内容 + 思考内容）
     """
@@ -72,7 +73,8 @@ class GoogleGemini:
             },
             "optional": {
                 "图片": ("IMAGE",),
-                "视频": ("VIDEO",)
+                "视频": ("VIDEO",),
+                "文件": ("FILE",)
             }
         }
     
@@ -136,17 +138,47 @@ class GoogleGemini:
         if video is None:
             return None
         
-        # VIDEO 类型通常是一个字典，包含 'video' 键指向文件路径
-        # 或者直接是文件路径字符串
+        # VIDEO 类型处理：支持多种格式
         video_path = None
         
         if isinstance(video, dict):
-            # 尝试获取视频路径
-            video_path = video.get("video") or video.get("path") or video.get("file")
+            # 字典格式：尝试常见的键名
+            video_path = video.get("video") or video.get("path") or video.get("file") or video.get("filename")
+            # 如果还是找不到，遍历所有键找到有效路径
+            if not video_path:
+                for key, val in video.items():
+                    if isinstance(val, str) and os.path.exists(val):
+                        video_path = val
+                        break
         elif isinstance(video, str):
+            # 字符串格式：直接作为路径
             video_path = video
-        elif hasattr(video, "video"):
-            video_path = video.video
+        else:
+            # 对象格式：尝试常见属性
+            # 1. 尝试 __file 属性（VideoFromFile 对象）
+            if hasattr(video, "__file"):
+                video_path = video.__file
+            # 2. 尝试其他常见属性
+            elif hasattr(video, "video"):
+                video_path = video.video
+            elif hasattr(video, "path"):
+                video_path = video.path
+            elif hasattr(video, "filename"):
+                video_path = video.filename
+            # 3. 尝试从 __dict__ 中查找路径（支持私有属性如 _VideoFromFile__file）
+            elif hasattr(video, "__dict__"):
+                for attr_name, attr_value in video.__dict__.items():
+                    # 查找字符串类型的属性，且包含 file 或 path 关键字
+                    if isinstance(attr_value, str):
+                        if "file" in attr_name.lower() or "path" in attr_name.lower():
+                            # 验证路径是否有效
+                            if os.path.exists(attr_value):
+                                video_path = attr_value
+                                break
+                        # 如果属性值本身看起来像文件路径，也尝试使用
+                        elif os.path.exists(attr_value) and os.path.isfile(attr_value):
+                            video_path = attr_value
+                            break
         
         if not video_path or not os.path.exists(video_path):
             print(f"Google Gemini: 视频文件不存在或路径无效: {video_path}")
@@ -181,6 +213,29 @@ class GoogleGemini:
         except Exception as e:
             print(f"Google Gemini: 读取视频文件失败 - {str(e)}")
             return None
+    
+    def _prepare_file_data(
+        self, 
+        file: Optional[FileData]
+    ) -> Optional[Dict[str, str]]:
+        """
+        准备文件数据
+        
+        从 FILE 类型提取文件数据
+        
+        Args:
+            file: FileData 对象（来自 LoadFile 节点）
+        
+        Returns:
+            文件数据字典，包含 mime_type 和 data
+        """
+        if file is None:
+            return None
+        
+        return {
+            "mime_type": file.mime_type,
+            "data": file.data
+        }
     
     def _parse_dual_output(self, raw_response: Dict) -> Tuple[str, str]:
         """
@@ -217,7 +272,8 @@ class GoogleGemini:
         提示词: str,
         思考等级: str,
         图片: Optional[torch.Tensor] = None,
-        视频=None
+        视频=None,
+        文件: Optional[FileData] = None
     ) -> Tuple[str]:
         """
         生成文本
@@ -228,6 +284,7 @@ class GoogleGemini:
             思考等级: 思考等级选项
             图片: 输入图片
             视频: 输入视频
+            文件: 输入文件（PDF/TXT）
         
         Returns:
             (主要内容, 思考内容)
@@ -252,6 +309,12 @@ class GoogleGemini:
             if video_data:
                 print(f"Google Gemini: 输入视频 ({video_data['mime_type']})")
             
+            # 准备文件数据
+            document_data = self._prepare_file_data(文件)
+            if document_data:
+                file_type = "PDF" if document_data['mime_type'] == "application/pdf" else "TXT"
+                print(f"Google Gemini: 输入文件 ({file_type})")
+            
             # 构建输入描述
             input_desc = []
             if 提示词:
@@ -260,6 +323,8 @@ class GoogleGemini:
                 input_desc.append(f"{len(image_data)}张图片")
             if video_data:
                 input_desc.append("视频")
+            if document_data:
+                input_desc.append("文件")
             
             print(f"Google Gemini: 模型 = {模型}")
             print(f"Google Gemini: 多模态输入 ({', '.join(input_desc)})")
@@ -273,7 +338,8 @@ class GoogleGemini:
                 model=模型,
                 thinking_level=思考等级,
                 image_data=image_data,
-                video_data=video_data
+                video_data=video_data,
+                document_data=document_data
             )
             
             # 调用底层 API 获取原始响应

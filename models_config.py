@@ -44,32 +44,11 @@ GEMINI_MODELS = [
         "endpoint": None  # 动态端点，由代码根据分辨率选择
     },
     {
-        "id": "gemini-3-pro-image-preview-url",
-        "description": "URL 模式,根据分辨率自动选择端点 (1K/2K/4K),推荐用于需要不同分辨率的场景",
-        "enabled": False,
-        "endpoint_type": "dynamic",
-        "endpoint": None  # 动态端点，由代码根据分辨率选择
-    },
-    {
         "id": "gemini-3-pro-image-preview",
         "description": "标准模式,固定端点,适用于常规图像生成",
         "enabled": True,
         "endpoint_type": "standard",
         "endpoint": "/v1beta/models/gemini-3-pro-image-preview:generateContent"
-    },
-    {
-        "id": "gemini-3-pro-image-preview-flatfee",
-        "description": "固定费用模式,固定端点,按固定价格计费 (暂时不可用-504错误)",
-        "enabled": False,  # 暂时禁用：端点返回 504 错误
-        "endpoint_type": "flatfee",
-        "endpoint": "/v1beta/models/gemini-3-pro-image-preview-flatfee:generateContent"
-    },
-    {
-        "id": "nano-banana-2",
-        "description": "Nano Banana 2 模型,固定端点,适用于高质量图像生成",
-        "enabled": False,
-        "endpoint_type": "standard",
-        "endpoint": "/v1beta/models/nano-banana-2:generateContent"
     }
 ]
 
