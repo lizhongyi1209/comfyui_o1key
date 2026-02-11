@@ -46,12 +46,13 @@ if exist ".config" (
 
 echo.
 echo [3/4] 拉取最新代码...
-git pull origin main
+git pull origin main --quiet
 if %errorlevel% neq 0 (
     echo [错误] 代码更新失败，请检查网络连接或手动解决冲突
     pause
     exit /b 1
 )
+echo 代码更新成功
 
 :: 恢复配置文件
 if exist ".config.backup" (
@@ -65,28 +66,14 @@ echo [4/4] 更新依赖包...
 python -m pip install -r requirements.txt --upgrade --quiet
 if %errorlevel% neq 0 (
     echo [警告] 依赖包更新失败，请手动运行: pip install -r requirements.txt
+) else (
+    echo 依赖包更新成功
 )
 
 echo.
 echo ====================================
-echo 更新完成！
+echo √ 更新完成！
 echo ====================================
-
-:: 显示新版本
-if exist "version.txt" (
-    set /p NEW_VERSION=<version.txt
-    echo 新版本: %NEW_VERSION%
-)
-
-:: 显示最近更新日志
-if exist "CHANGELOG.md" (
-    echo.
-    echo 最近更新内容:
-    echo -----------------------------------
-    powershell -Command "Get-Content CHANGELOG.md -TotalCount 20"
-    echo -----------------------------------
-)
-
 echo.
 echo 请重启 ComfyUI 以使更改生效
 echo.

@@ -55,7 +55,7 @@ fi
 
 echo ""
 echo "[3/4] 拉取最新代码..."
-if git pull origin main; then
+if git pull origin main --quiet; then
     echo -e "${GREEN}代码更新成功${NC}"
 else
     echo -e "${RED}[错误] 代码更新失败，请检查网络连接或手动解决冲突${NC}"
@@ -78,24 +78,8 @@ fi
 
 echo ""
 echo "===================================="
-echo -e "${GREEN}更新完成！${NC}"
+echo -e "${GREEN}✓ 更新完成！${NC}"
 echo "===================================="
-
-# 显示新版本
-if [ -f "version.txt" ]; then
-    NEW_VERSION=$(cat version.txt)
-    echo "新版本: $NEW_VERSION"
-fi
-
-# 显示最近更新日志
-if [ -f "CHANGELOG.md" ]; then
-    echo ""
-    echo "最近更新内容:"
-    echo "-----------------------------------"
-    head -n 20 CHANGELOG.md
-    echo "-----------------------------------"
-fi
-
 echo ""
 echo "请重启 ComfyUI 以使更改生效"
 echo ""

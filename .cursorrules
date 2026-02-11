@@ -38,6 +38,36 @@ git commit -m "fix: resolve image encoding issue"
 git commit -m "docs: update README installation guide"
 ```
 
+## 配置文件管理
+
+### 基本原则
+
+`.config` 文件包含敏感信息（API 密钥），已添加到 `.gitignore` 中，**不会被提交到版本控制**。
+
+### 配置方式
+
+用户通过以下方式创建本地配置：
+
+1. **快捷脚本**（推荐）
+   - Windows: 双击 `设置API密钥(win).bat`
+   - Linux/Mac: 运行 `./设置API密钥(mac).sh`
+   - 脚本会自动创建 `.config` 文件
+
+2. **手动创建**
+   - 参考 `.config.example` 模板
+   - 在插件根目录创建 `.config` 文件
+   - 填写 API 密钥
+
+3. **环境变量**
+   - 设置 `O1KEY_API_KEY` 环境变量
+   - 无需创建配置文件
+
+### 注意事项
+
+- `.config` 文件仅存在于本地，不会被 Git 追踪
+- 开发者无需担心意外提交密钥的问题
+- 提交代码时会自动忽略 `.config` 文件
+
 ## 项目概述
 
 这是一个 ComfyUI 自定义节点插件，通过 api.o1key.com 调用 AI 模型进行图像生成。
@@ -73,10 +103,13 @@ Comfyui_o1key/
 │   ├── __init__.py
 │   ├── base_client.py       # 客户端基类
 │   └── gemini_client.py     # Gemini API 客户端
-├── .config                  # API 配置文件（不提交）
-├── .config.example          # 配置示例
+├── .config.example          # 配置文件模板
 ├── requirements.txt         # 依赖包
 └── README.md                # 用户文档
+├── 设置API密钥(win).bat     # Windows 配置脚本
+└── 设置API密钥(mac).sh      # Mac/Linux 配置脚本
+
+注：.config 文件在本地自动创建，不提交到版本控制
 ```
 
 ---

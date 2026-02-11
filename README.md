@@ -45,7 +45,25 @@ pip install -r requirements.txt
 
 #### 配置 API 密钥（必需）
 
-**方法一：环境变量（推荐）**
+**方法一：快捷脚本配置（最简单）⭐**
+
+我们提供了一键配置脚本，自动创建配置文件：
+
+**Windows 用户：**
+双击运行 `设置API密钥(win).bat`，按提示输入 API 密钥即可。
+
+**Linux/Mac 用户：**
+```bash
+# 添加执行权限（仅首次需要）
+chmod +x 设置API密钥(mac).sh
+
+# 运行配置脚本
+./设置API密钥(mac).sh
+```
+
+按提示输入 API 密钥，配置完成后重启 ComfyUI。
+
+**方法二：环境变量（推荐）**
 
 **Windows 用户：**
 1. 右键 "此电脑" → 属性 → 高级系统设置 → 环境变量
@@ -63,12 +81,17 @@ export O1KEY_API_KEY="你的API密钥"
 
 然后执行 `source ~/.bashrc` 并重启 ComfyUI。
 
-**方法二：配置文件**
+**方法三：手动创建配置文件**
 
 在插件目录下创建 `.config` 文件（参考 `.config.example`）：
 ```
 O1KEY_API_KEY=你的API密钥
 ```
+
+> **⚠️ 安全提示**
+> 
+> `.config` 文件包含敏感信息，已添加到 `.gitignore` 中，不会被提交到版本控制。
+> 请妥善保管你的 API 密钥，不要分享给他人。
 
 #### 配置 API 地址（可选）
 
