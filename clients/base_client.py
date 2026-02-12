@@ -114,11 +114,8 @@ class BaseAPIClient(ABC):
         request_size = len(request_json.encode('utf-8'))
         
         if request_size > self.max_request_size:
-            size_mb = request_size / 1024 / 1024
-            limit_mb = self.max_request_size / 1024 / 1024
             raise ValueError(
-                f"请求体大小 {size_mb:.2f}MB 超过限制 {limit_mb:.0f}MB，"
-                "请降低分辨率或减少图片数量"
+                "请求体积超过20MB限制，请调整分辨率或减少图片数量"
             )
     
     async def request_async(

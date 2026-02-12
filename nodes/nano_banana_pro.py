@@ -353,20 +353,24 @@ class NanoBananaPro:
             # 检测是否为授权错误
             if str(e) == "未授权！":
                 print("请联系作者授权后方可使用！")
+                raise ValueError("未授权！") from None
             else:
-                # 用户输入错误
-                print(f"Nano Banana Pro: 输入错误 - {str(e)}")
-            raise
+                # 用户输入错误 - 只显示简洁信息
+                error_msg = str(e).split('\n')[0]  # 只取第一行
+                print(f"Nano Banana Pro: ❌ {error_msg}")
+                raise ValueError(error_msg) from None
         
         except RuntimeError as e:
-            # API 或网络错误
-            print(f"Nano Banana Pro: API 错误 - {str(e)}")
-            raise
+            # API 或网络错误 - 只显示简洁信息
+            error_msg = str(e).split('\n')[0]  # 只取第一行
+            print(f"Nano Banana Pro: ❌ {error_msg}")
+            raise RuntimeError(error_msg) from None
         
         except Exception as e:
-            # 其他未知错误
-            print(f"Nano Banana Pro: 未知错误 - {str(e)}")
-            raise
+            # 其他未知错误 - 只显示简洁信息
+            error_msg = str(e).split('\n')[0]
+            print(f"Nano Banana Pro: ❌ {error_msg}")
+            raise type(e)(error_msg) from None
         
         finally:
             # 余额查询功能已停用（代码保留）

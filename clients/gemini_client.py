@@ -544,6 +544,7 @@ class GeminiAPIClient(BaseAPIClient):
         completed = 0
         success_count = 0
         fail_count = 0
+        first_error = None  # 保存第一个错误
         
         connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
         
@@ -578,6 +579,9 @@ class GeminiAPIClient(BaseAPIClient):
                             progress_callback(completed, batch_size, True, None)
                 except Exception as e:
                     fail_count += 1
+                    # 保存第一个错误（用于后续抛出）
+                    if first_error is None:
+                        first_error = e
                     error_msg = str(e)
                     # 截取错误信息的第一行
                     if '\n' in error_msg:
@@ -586,6 +590,9 @@ class GeminiAPIClient(BaseAPIClient):
                         progress_callback(completed, batch_size, False, error_msg)
         
         if not all_images:
+            # 如果有保存的原始错误，直接抛出原始错误
+            if first_error:
+                raise first_error
             raise RuntimeError(f"批量生成失败，{fail_count} 个请求全部失败")
         
         return all_images
@@ -661,6 +668,7 @@ class GeminiAPIClient(BaseAPIClient):
         completed = 0
         success_count = 0
         fail_count = 0
+        first_error = None  # 保存第一个错误
         total_tasks = len(prompts) * images_per_prompt
         
         connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
@@ -700,6 +708,9 @@ class GeminiAPIClient(BaseAPIClient):
                             progress_callback(completed, total_tasks, True, None)
                 except Exception as e:
                     fail_count += 1
+                    # 保存第一个错误（用于后续抛出）
+                    if first_error is None:
+                        first_error = e
                     error_msg = str(e)
                     # 截取错误信息的第一行
                     if '\n' in error_msg:
@@ -708,6 +719,9 @@ class GeminiAPIClient(BaseAPIClient):
                         progress_callback(completed, total_tasks, False, error_msg)
         
         if not all_images:
+            # 如果有保存的原始错误，直接抛出原始错误
+            if first_error:
+                raise first_error
             raise RuntimeError(f"批量生成失败，{fail_count} 个请求全部失败")
         
         return all_images

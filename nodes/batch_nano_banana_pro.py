@@ -737,17 +737,24 @@ class BatchNanoBananaPro:
             # 检测是否为授权错误
             if str(e) == "未授权！":
                 print("请联系作者授权后方可使用！")
+                raise ValueError("未授权！") from None
             else:
-                print(f"BatchNanoBananaPro: 输入错误 - {str(e)}")
-            raise
+                # 用户输入错误 - 只显示简洁信息
+                error_msg = str(e).split('\n')[0]  # 只取第一行
+                print(f"BatchNanoBananaPro: ❌ {error_msg}")
+                raise ValueError(error_msg) from None
         
         except RuntimeError as e:
-            print(f"BatchNanoBananaPro: 运行时错误 - {str(e)}")
-            raise
+            # 运行时错误 - 只显示简洁信息
+            error_msg = str(e).split('\n')[0]  # 只取第一行
+            print(f"BatchNanoBananaPro: ❌ {error_msg}")
+            raise RuntimeError(error_msg) from None
         
         except Exception as e:
-            print(f"BatchNanoBananaPro: 未知错误 - {str(e)}")
-            raise
+            # 其他未知错误 - 只显示简洁信息
+            error_msg = str(e).split('\n')[0]
+            print(f"BatchNanoBananaPro: ❌ {error_msg}")
+            raise type(e)(error_msg) from None
         
         finally:
             # 余额查询功能已停用（代码保留）
