@@ -16,7 +16,7 @@ from PIL import Image
 import torch
 import numpy as np
 
-from ..utils.image_utils import tensor_to_pil, pil_to_tensor
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts
 from ..utils.file_utils import (
     ImageInfo,
     load_images_from_folder,
@@ -35,6 +35,14 @@ try:
 except ImportError:
     PROGRESS_BAR_AVAILABLE = False
     print("⚠️ BatchNanoBananaPro: comfy.utils.ProgressBar 不可用，将只使用终端进度显示")
+
+# ============================================================================
+# 调试日志配置
+# ============================================================================
+# 是否启用调试日志（打印完整的 API 请求和响应内容）
+# 设置为 True 以启用调试日志，False 以禁用
+DEBUG_LOG_ENABLED = False
+# ============================================================================
 
 
 class BatchNanoBananaPro:
@@ -380,7 +388,8 @@ class BatchNanoBananaPro:
                     resolution=resolution,
                     aspect_ratio=aspect_ratio,
                     images=input_pil_images,
-                    session=session
+                    session=session,
+                    debug=DEBUG_LOG_ENABLED
                 )
                 if gen_result:
                     # 正确解包元组：第一个元素是图像列表，第二个是计时信息
@@ -422,18 +431,21 @@ class BatchNanoBananaPro:
         resolution: str,
         aspect_ratio: str,
         output_folder: str,
-        pbar=None
+        pbar=None,
+        prompts_per_task: Optional[List[str]] = None
     ) -> List[dict]:
         """
         异步批量处理所有任务
         
         Args:
             pairs: 配对后的图片组合
-            prompt: 提示词
+            prompt: 提示词（单提示词模式时使用）
             model: 模型名称
             resolution: 分辨率
             aspect_ratio: 宽高比
             output_folder: 输出文件夹
+            pbar: ComfyUI 进度条
+            prompts_per_task: 每个任务对应的提示词列表（批量提示词模式时使用）
         
         Returns:
             所有任务的结果列表
@@ -475,11 +487,13 @@ class BatchNanoBananaPro:
                 # 创建当前批次的任务
                 tasks = []
                 for i, pair in enumerate(batch_pairs):
+                    # 批量提示词模式时，每个任务使用对应的提示词；否则使用统一提示词
+                    task_prompt = prompts_per_task[start_idx + i] if prompts_per_task else prompt
                     task = asyncio.create_task(
                         self._generate_single_task(
                             client=self.client,
                             session=session,
-                            prompt=prompt,
+                            prompt=task_prompt,
                             model=model,
                             resolution=resolution,
                             aspect_ratio=aspect_ratio,
@@ -632,10 +646,27 @@ class BatchNanoBananaPro:
             if not pairs:
                 raise ValueError("配对结果为空，请检查输入")
             
+            # 解析批量提示词（使用 --- 分隔多个提示词）
+            batch_prompts = parse_batch_prompts(prompt)
+            prompts_per_task = None
+            if batch_prompts:
+                # 展开 pairs × prompts：每个图片组合 × 每个提示词 = 一个任务
+                expanded_pairs = []
+                expanded_prompts = []
+                for pair in pairs:
+                    for bp in batch_prompts:
+                        expanded_pairs.append(pair)
+                        expanded_prompts.append(bp)
+                pairs = expanded_pairs
+                prompts_per_task = expanded_prompts
+            
             total_tasks = len(pairs)
             
             # 打印首行概览
-            print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 | 共 {total_tasks} 任务")
+            if batch_prompts:
+                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 × {len(batch_prompts)}个提示词 | 共 {total_tasks} 任务")
+            else:
+                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 | 共 {total_tasks} 任务")
             
             # 创建 ComfyUI 原生进度条
             pbar = None
@@ -663,7 +694,8 @@ class BatchNanoBananaPro:
                             resolution=分辨率,
                             aspect_ratio=宽高比,
                             output_folder=保存路径,
-                            pbar=pbar
+                            pbar=pbar,
+                            prompts_per_task=prompts_per_task
                         )
                     )
                 finally:
