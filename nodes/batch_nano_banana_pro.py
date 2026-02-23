@@ -147,6 +147,11 @@ class BatchNanoBananaPro:
         for i in range(1, 10):  # 1-9
             optional_inputs[f"参考图{i}"] = ("IMAGE",)
         
+        # 图片配对模式移到可选参数
+        optional_inputs["图片配对模式"] = (cls.PAIRING_MODES, {
+            "default": "不配对"
+        })
+        
         return {
             "required": {
                 "prompt": ("STRING", {
@@ -196,9 +201,6 @@ class BatchNanoBananaPro:
                 "保存路径": ("STRING", {
                     "default": "",
                     "multiline": False
-                }),
-                "图片配对模式": (cls.PAIRING_MODES, {
-                    "default": "不配对"
                 })
             },
             "optional": optional_inputs
@@ -289,54 +291,47 @@ class BatchNanoBananaPro:
         Raises:
             ValueError: 不配对模式下填入多个文件夹时
         """
-        # === 新模式：不配对 ===
+        # === 不配对模式 ===
         if pairing_mode == "不配对":
             # 验证：只支持单个文件夹
             if len(image_lists) > 1:
                 raise ValueError("「不配对」模式只支持单个文件夹，请清空其他文件夹路径")
             
-            # 场景1：有文件夹 + 有参考图
+            # 场景1：有文件夹 + 有参考图 → 每张文件夹图片 + 所有参考图
             if image_lists and manual_images:
                 folder_images = image_lists[0]
-                # 每张文件夹图片 + 所有参考图
                 pairs = []
                 for img in folder_images:
                     pair = (img,) + tuple(manual_images)
                     pairs.append(pair)
                 return pairs
             
-            # 场景2：有文件夹 + 无参考图
+            # 场景2：有文件夹 + 无参考图 → 每张图片单独成组
             elif image_lists:
-                # 每张图片单独成组
                 return [(img,) for img in image_lists[0]]
-            
-            # 场景3：无文件夹 + 有参考图
-            elif manual_images:
-                # 每张参考图单独成组
-                return [(img,) for img in manual_images]
             
             else:
                 return []
         
-        # === 原有逻辑：1:1 和 1*N ===
-        # 如果有手动参考图，添加到列表中（所有参考图作为一个列表）
-        if manual_images:
-            image_lists.append(manual_images)
-        
+        # === 1:1 和 1*N 模式 ===
+        # 参考图不参与配对，仅在文件夹图片之间进行配对
         if not image_lists:
             return []
         
-        # 如果只有一个列表，直接返回每个图片作为单元素元组
+        # 文件夹图片配对
         if len(image_lists) == 1:
-            return [(img,) for img in image_lists[0]]
-        
-        # 根据配对模式选择配对函数
-        if pairing_mode == "1:1":
-            pairs = pair_images_indexed(*image_lists)
+            base_pairs = [(img,) for img in image_lists[0]]
+        elif pairing_mode == "1:1":
+            base_pairs = list(pair_images_indexed(*image_lists))
         else:  # 1*N
-            pairs = pair_images_cartesian(*image_lists)
+            base_pairs = list(pair_images_cartesian(*image_lists))
         
-        return pairs
+        # 将所有参考图追加到每组末尾（不参与配对逻辑）
+        if manual_images:
+            manual_tuple = tuple(manual_images)
+            base_pairs = [pair + manual_tuple for pair in base_pairs]
+        
+        return base_pairs
     
     async def _generate_single_task(
         self,
@@ -372,6 +367,7 @@ class BatchNanoBananaPro:
             "success": False,
             "generated_count": 0,
             "saved_files": [],
+            "output_images": [],  # 无保存路径时存储内存图片
             "error": None
         }
         
@@ -400,18 +396,24 @@ class BatchNanoBananaPro:
                 print(f"BatchNanoBananaPro: 任务 {task_index + 1} 生成失败 - {error_msg}")
                 result["error"] = error_msg
             
-            # 保存生成的图片
+            has_save_path = bool(output_folder and output_folder.strip())
+            
+            # 保存或存储生成的图片
             for i, gen_img in enumerate(generated_images):
-                # 使用任务索引作为唯一标识，确保并发安全
-                output_path = generate_output_filename(
-                    source_images=list(images),
-                    batch_index=i,
-                    output_folder=output_folder,
-                    extension=".png",
-                    task_id=f"task{task_index}"
-                )
-                save_image(gen_img, output_path)
-                result["saved_files"].append(output_path)
+                if has_save_path:
+                    # 有保存路径：写入磁盘
+                    output_path = generate_output_filename(
+                        source_images=list(images),
+                        batch_index=i,
+                        output_folder=output_folder,
+                        extension=".png",
+                        task_id=f"task{task_index}"
+                    )
+                    save_image(gen_img, output_path)
+                    result["saved_files"].append(output_path)
+                else:
+                    # 无保存路径：存入内存
+                    result["output_images"].append(gen_img)
             
             # 只有生成了图片才标记为成功
             if len(generated_images) > 0:
@@ -570,11 +572,11 @@ class BatchNanoBananaPro:
         像素缩放: bool,
         分辨率像素: float,
         seed: int,
-        保存路径: str,
         图片配对模式: str,
         模型: str,
         宽高比: str,
         分辨率: str,
+        保存路径: str = "",
         **kwargs
     ) -> Tuple[torch.Tensor]:
         """
@@ -602,9 +604,14 @@ class BatchNanoBananaPro:
             # 设置随机种子（用于本地随机操作）
             random.seed(seed)
             np.random.seed(seed % (2**32))
-            # 验证保存路径
-            if not 保存路径 or not 保存路径.strip():
-                raise ValueError("请提供保存路径")
+            
+            # 验证：至少需要填写一个文件夹路径
+            has_any_folder = any(
+                f and f.strip()
+                for f in [文件夹1, 文件夹2, 文件夹3, 文件夹4]
+            )
+            if not has_any_folder:
+                raise ValueError("请至少填写一个文件夹路径，该节点专为批量文件夹处理设计")
             
             # 加载文件夹图片
             print("BatchNanoBananaPro: 开始加载图片...")
@@ -612,6 +619,11 @@ class BatchNanoBananaPro:
                 文件夹1, 文件夹2, 文件夹3, 文件夹4,
                 像素缩放, 分辨率像素
             )
+            
+            # 验证文件夹是否有可用图片
+            total_folder_images = sum(len(lst) for lst in image_lists)
+            if total_folder_images == 0:
+                raise ValueError("文件夹中未找到任何图片，请检查文件夹路径是否正确")
             
             # 处理独立的参考图输入
             manual_images = []
@@ -632,13 +644,6 @@ class BatchNanoBananaPro:
                                 source_path=""
                             )
                         )
-            
-            # 验证是否有图片
-            total_folder_images = sum(len(lst) for lst in image_lists)
-            total_manual_images = len(manual_images)
-            
-            if total_folder_images == 0 and total_manual_images == 0:
-                raise ValueError("未找到任何图片，请检查文件夹路径或提供参考图")
             
             # 创建配对
             pairs = self._create_pairs(image_lists, 图片配对模式, manual_images if manual_images else None)
@@ -727,9 +732,13 @@ class BatchNanoBananaPro:
             avg_time_str = f"{avg_time:.1f}s/张" if success_count > 0 else "N/A"
             
             # 精简统计信息
+            has_save_path = bool(保存路径 and 保存路径.strip())
             print("=" * 60)
             print(f"完成！总耗时 {time_str} | 成功: {success_count}/{total_tasks} | 生成 {total_generated} 张 | 平均 {avg_time_str}")
-            print(f"保存路径: {保存路径}")
+            if has_save_path:
+                print(f"保存路径: {保存路径}")
+            else:
+                print("保存路径: 未设置（仅输出到节点）")
             
             # 失败详情（如果有）
             failed_results = [r for r in results if not r.get("success", False)]
@@ -746,7 +755,7 @@ class BatchNanoBananaPro:
                     first_error = first_error.split('\n')[0]
                 print(f"失败 {len(failed_results)}个: 任务{failed_str} - {first_error}")
             
-            # 收集所有生成的图片
+            # 收集所有生成的图片（从磁盘文件 + 内存图片两路汇总）
             output_images = []
             for file_path in all_saved_files:
                 try:
@@ -754,6 +763,10 @@ class BatchNanoBananaPro:
                     output_images.append(img)
                 except Exception as e:
                     print(f"BatchNanoBananaPro: 无法加载图片 {file_path} - {e}")
+            
+            # 收集无保存路径时的内存图片
+            for r in results:
+                output_images.extend(r.get("output_images", []))
             
             # 如果没有生成成功的图片，创建一个占位图
             if not output_images:
