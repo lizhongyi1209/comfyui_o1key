@@ -23,6 +23,14 @@ except ImportError:
     PROGRESS_BAR_AVAILABLE = False
     print("⚠️ NanoBananaPro: comfy.utils.ProgressBar 不可用，将只使用终端进度显示")
 
+# ============================================================================
+# 调试日志配置
+# ============================================================================
+# 是否启用调试日志（打印完整的 API 请求和响应内容）
+# 设置为 True 以启用调试日志，False 以禁用
+DEBUG_LOG_ENABLED = False
+# ============================================================================
+
 
 class NanoBananaPro:
     """
@@ -221,6 +229,9 @@ class NanoBananaPro:
             分辨率像素: 目标像素数（百万像素）
             seed: 随机种子
             **kwargs: 动态参考图输入 (参考图1-9)
+            
+        注意：
+            调试日志功能已移至文件顶部配置，通过修改 DEBUG_LOG_ENABLED 常量控制
         
         Returns:
             生成的图像张量 (IMAGE,)
@@ -317,7 +328,8 @@ class NanoBananaPro:
                     aspect_ratio=宽高比,
                     images_per_prompt=生图数量,
                     images=input_images,
-                    progress_callback=progress_callback
+                    progress_callback=progress_callback,
+                    debug=DEBUG_LOG_ENABLED
                 )
             else:
                 # 单提示词模式
@@ -328,7 +340,8 @@ class NanoBananaPro:
                     aspect_ratio=宽高比,
                     batch_size=生图数量,
                     images=input_images,
-                    progress_callback=progress_callback
+                    progress_callback=progress_callback,
+                    debug=DEBUG_LOG_ENABLED
                 )
             
             # 转换输出图像

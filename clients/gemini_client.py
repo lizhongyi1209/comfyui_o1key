@@ -410,7 +410,8 @@ class GeminiAPIClient(BaseAPIClient):
         images: Optional[List[Image.Image]] = None,
         session=None,
         task_index: Optional[int] = None,
-        total_tasks: Optional[int] = None
+        total_tasks: Optional[int] = None,
+        debug: bool = False
     ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
         单次异步生成请求（极简单行日志）
@@ -466,6 +467,30 @@ class GeminiAPIClient(BaseAPIClient):
         
         request_time = time.time() - request_start
         
+        # ========== 调试日志：打印完整响应 ==========
+        if debug:
+            import json as _json
+            # 构建可安全序列化的响应副本（截断 base64 图片数据避免输出过长）
+            def _truncate_base64(obj, max_len=200):
+                if isinstance(obj, dict):
+                    return {k: _truncate_base64(v, max_len) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [_truncate_base64(item, max_len) for item in obj]
+                elif isinstance(obj, str) and len(obj) > max_len:
+                    # 判断是否为 base64 图片数据（不含空格/换行的长字符串）
+                    if all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in obj[:50]):
+                        return f"<base64 data, {len(obj)} chars>"
+                    return obj
+                return obj
+            
+            safe_response = _truncate_base64(response)
+            print(
+                f"\n{'='*60}\n"
+                f"[调试日志] 任务 {task_prefix or '?'} 完整 API 响应：\n"
+                f"{_json.dumps(safe_response, ensure_ascii=False, indent=2)}\n"
+                f"{'='*60}\n"
+            )
+        
         # ========== 3. 解析响应 ==========
         parse_start = time.time()
         
@@ -520,7 +545,8 @@ class GeminiAPIClient(BaseAPIClient):
         aspect_ratio: str,
         batch_size: int,
         images: Optional[List[Image.Image]] = None,
-        progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None
+        progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None,
+        debug: bool = False
     ) -> List[Image.Image]:
         """
         批量全并发生成
@@ -561,7 +587,8 @@ class GeminiAPIClient(BaseAPIClient):
                         images=images,
                         session=session,
                         task_index=i + 1,
-                        total_tasks=batch_size
+                        total_tasks=batch_size,
+                        debug=debug
                     ),
                     name=f"task_{i}"
                 )
@@ -605,7 +632,8 @@ class GeminiAPIClient(BaseAPIClient):
         aspect_ratio: str,
         batch_size: int,
         images: Optional[List[Image.Image]] = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        debug: bool = False
     ) -> List[Image.Image]:
         """
         同步生成接口（用于 ComfyUI）
@@ -629,7 +657,8 @@ class GeminiAPIClient(BaseAPIClient):
             aspect_ratio=aspect_ratio,
             batch_size=batch_size,
             images=images,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            debug=debug
         )
         
         return self.run_async_in_thread(coro)
@@ -642,7 +671,8 @@ class GeminiAPIClient(BaseAPIClient):
         aspect_ratio: str,
         images_per_prompt: int,
         images: Optional[List[Image.Image]] = None,
-        progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None
+        progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None,
+        debug: bool = False
     ) -> List[Image.Image]:
         """
         多提示词批量生成
@@ -689,7 +719,8 @@ class GeminiAPIClient(BaseAPIClient):
                             images=images,
                             session=session,
                             task_index=task_idx + 1,
-                            total_tasks=total_tasks
+                            total_tasks=total_tasks,
+                            debug=debug
                         ),
                         name=f"task_{task_idx}"
                     )
@@ -734,7 +765,8 @@ class GeminiAPIClient(BaseAPIClient):
         aspect_ratio: str,
         images_per_prompt: int,
         images: Optional[List[Image.Image]] = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        debug: bool = False
     ) -> List[Image.Image]:
         """
         多提示词批量生成（同步接口，用于 ComfyUI）
@@ -758,7 +790,8 @@ class GeminiAPIClient(BaseAPIClient):
             aspect_ratio=aspect_ratio,
             images_per_prompt=images_per_prompt,
             images=images,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            debug=debug
         )
         
         return self.run_async_in_thread(coro)
