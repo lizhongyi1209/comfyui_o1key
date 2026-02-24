@@ -23,7 +23,7 @@ if exist "version.txt" (
 )
 
 echo.
-echo [1/3] 检查远程更新...
+echo [1/4] 检查远程更新...
 git fetch origin
 
 :: 检查是否有更新
@@ -32,18 +32,20 @@ if %errorlevel% equ 0 (
     echo 发现新版本！
 ) else (
     echo 已是最新版本
-    goto :end
+    echo.
+    choice /C YN /M "是否继续检查依赖更新？"
+    if errorlevel 2 goto :end
 )
 
 echo.
-echo [2/3] 备份配置文件...
+echo [2/4] 备份配置文件...
 if exist ".config" (
     copy /Y ".config" ".config.backup" > nul
     echo 已备份 .config 到 .config.backup
 )
 
 echo.
-echo [3/3] 拉取最新代码...
+echo [3/4] 拉取最新代码...
 git pull origin main --quiet
 if %errorlevel% neq 0 (
     echo [错误] 代码更新失败，请检查网络连接或手动解决冲突
@@ -57,6 +59,15 @@ if exist ".config.backup" (
     copy /Y ".config.backup" ".config" > nul
     del ".config.backup"
     echo 已恢复配置文件
+)
+
+echo.
+echo [4/4] 更新依赖包...
+python -m pip install -r requirements.txt --upgrade --quiet
+if %errorlevel% neq 0 (
+    echo [警告] 依赖包更新失败，请手动运行: pip install -r requirements.txt
+) else (
+    echo 依赖包更新成功
 )
 
 echo.

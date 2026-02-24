@@ -28,7 +28,7 @@ else
 fi
 
 echo ""
-echo "[1/3] 检查远程更新..."
+echo "[1/4] 检查远程更新..."
 git fetch origin
 
 # 检查是否有更新
@@ -39,18 +39,22 @@ if [ $LOCAL != $REMOTE ]; then
     echo -e "${GREEN}发现新版本！${NC}"
 else
     echo -e "${GREEN}已是最新版本${NC}"
-    exit 0
+    read -p "是否继续检查依赖更新？(y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 0
+    fi
 fi
 
 echo ""
-echo "[2/3] 备份配置文件..."
+echo "[2/4] 备份配置文件..."
 if [ -f ".config" ]; then
     cp .config .config.backup
     echo "已备份 .config 到 .config.backup"
 fi
 
 echo ""
-echo "[3/3] 拉取最新代码..."
+echo "[3/4] 拉取最新代码..."
 if git pull origin main --quiet; then
     echo -e "${GREEN}代码更新成功${NC}"
 else
@@ -62,6 +66,14 @@ fi
 if [ -f ".config.backup" ]; then
     mv .config.backup .config
     echo "已恢复配置文件"
+fi
+
+echo ""
+echo "[4/4] 更新依赖包..."
+if python3 -m pip install -r requirements.txt --upgrade --quiet; then
+    echo -e "${GREEN}依赖包更新成功${NC}"
+else
+    echo -e "${YELLOW}[警告] 依赖包更新失败，请手动运行: pip install -r requirements.txt${NC}"
 fi
 
 echo ""
