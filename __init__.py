@@ -19,7 +19,7 @@ except Exception:
     # 静默失败，不影响插件加载
     pass
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata
 
 # ComfyUI 节点注册
 NODE_CLASS_MAPPINGS = {
@@ -28,6 +28,8 @@ NODE_CLASS_MAPPINGS = {
     "GoogleGemini": GoogleGemini,
     "LoadFile": LoadFile,
     "ImageStitchPro": ImageStitchPro,
+    "SaveCleanImage": SaveCleanImage,
+    "BatchCleanMetadata": BatchCleanMetadata,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -36,6 +38,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "GoogleGemini": "Google Gemini",
     "LoadFile": "加载文件",
     "ImageStitchPro": "图像拼接 Pro",
+    "SaveCleanImage": "保存图像（防AI识别）",
+    "BatchCleanMetadata": "批量任务（防AI识别）",
 }
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']

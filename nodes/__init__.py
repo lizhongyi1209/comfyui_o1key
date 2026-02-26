@@ -8,5 +8,6 @@ from .batch_nano_banana_pro import BatchNanoBananaPro
 from .google_gemini import GoogleGemini
 from .load_file import LoadFile
 from .image_stitch_pro import ImageStitchPro
+from .remove_metadata import SaveCleanImage, BatchCleanMetadata
 
-__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro']
+__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata']
