@@ -11,7 +11,8 @@ import aiohttp
 from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..models_config import (
     get_flash_model_endpoint,
-    get_enabled_flash_models
+    get_enabled_flash_models,
+    get_flash_model_thinking_level_value,
 )
 from .base_client import BaseAPIClient
 
@@ -43,31 +44,29 @@ class GeminiFlashClient(BaseAPIClient):
         )
     
     def get_endpoint(
-        self, 
+        self,
         model: str = "gemini-3-flash-preview",
-        thinking_level: str = "不思考",
         **kwargs
     ) -> str:
         """
-        根据模型和思考等级获取 API 端点
+        获取模型的 API 端点
         
         Args:
             model: 模型名称
-            thinking_level: 思考等级（不思考/低/中/高）
         
         Returns:
             API 端点路径
         """
-        endpoint = get_flash_model_endpoint(model, thinking_level)
+        endpoint = get_flash_model_endpoint(model)
         
         if endpoint is None:
-            # 回退到默认端点
+            # 回退到第一个启用的模型端点
             default_models = get_enabled_flash_models()
             if default_models:
-                endpoint = get_flash_model_endpoint(default_models[0], thinking_level)
+                endpoint = get_flash_model_endpoint(default_models[0])
         
         if endpoint is None:
-            raise ValueError(f"无法获取模型 '{model}' (思考等级: {thinking_level}) 的端点")
+            raise ValueError(f"无法获取模型 '{model}' 的端点")
         
         return endpoint
     
@@ -138,7 +137,16 @@ class GeminiFlashClient(BaseAPIClient):
             ]
         }
         
-        # 注意：思考等级现在通过动态端点控制，不再需要 thinkingConfig
+        # 对于支持 thinkingConfig 的固定端点模型（如 gemini-3-pro-preview）
+        # 通过请求体传递思考等级；动态端点模型（如 gemini-3-flash-preview）
+        # 通过不同 URL 端点控制，无需此字段
+        thinking_level_value = get_flash_model_thinking_level_value(model, thinking_level)
+        if thinking_level_value is not None:
+            request_body["generationConfig"] = {
+                "thinkingConfig": {
+                    "thinkingLevel": thinking_level_value
+                }
+            }
         
         return request_body
     
@@ -223,7 +231,7 @@ class GeminiFlashClient(BaseAPIClient):
         Returns:
             生成的文本内容
         """
-        endpoint = self.get_endpoint(model=model, thinking_level=thinking_level)
+        endpoint = self.get_endpoint(model=model)
         request_body = self.build_request_body(
             prompt=prompt,
             model=model,

@@ -38,7 +38,7 @@ class GoogleGemini:
     功能：
     - 支持多个 Gemini Flash 模型
     - 支持图片、视频和文件输入
-    - 支持不同思考等级（不思考/低/中/高）- 通过动态端点控制
+    - 支持不同思考等级（不思考/低/中/高）- 通过 thinkingConfig.thinkingLevel 控制
     - 输出生成的文本内容（主要内容 + 思考内容）
     """
     
@@ -329,10 +329,9 @@ class GoogleGemini:
             print(f"Google Gemini: 模型 = {模型}")
             print(f"Google Gemini: 多模态输入 ({', '.join(input_desc)})")
             print(f"Google Gemini: 思考等级 = {思考等级}")
-            print(f"Google Gemini: 发送请求...")
             
-            # 获取动态端点和构建请求体
-            endpoint = self.client.get_endpoint(model=模型, thinking_level=思考等级)
+            # 获取端点和构建请求体
+            endpoint = self.client.get_endpoint(model=模型)
             request_body = self.client.build_request_body(
                 prompt=提示词,
                 model=模型,
@@ -341,6 +340,8 @@ class GoogleGemini:
                 video_data=video_data,
                 document_data=document_data
             )
+            
+            print(f"Google Gemini: 发送请求...")
             
             # 调用底层 API 获取原始响应
             async def get_raw_response():
@@ -359,8 +360,20 @@ class GoogleGemini:
             # 解析响应，分离主要内容和思考内容
             main_text, thought_text = self._parse_dual_output(raw_response)
             
-            # 输出信息
+            # 打印响应 token 用量
+            usage = raw_response.get("usageMetadata", {})
+            prompt_tokens = usage.get("promptTokenCount", 0)
+            candidates_tokens = usage.get("candidatesTokenCount", 0)
+            thoughts_tokens = usage.get("thoughtsTokenCount", 0)
+            total_tokens = usage.get("totalTokenCount", 0)
+            finish_reason = ""
+            candidates = raw_response.get("candidates", [])
+            if candidates:
+                finish_reason = candidates[0].get("finishReason", "")
+            
             print(f"Google Gemini: 生成完成 (耗时: {elapsed:.2f}s)")
+            print(f"Google Gemini: finishReason = {finish_reason}")
+            print(f"Google Gemini: Token 用量 — 输入: {prompt_tokens}, 输出: {candidates_tokens}, 思考: {thoughts_tokens}, 合计: {total_tokens}")
             print(f"Google Gemini: 主要内容长度: {len(main_text)} 字符")
             print(f"Google Gemini: 思考内容长度: {len(thought_text)} 字符")
             
