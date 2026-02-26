@@ -19,21 +19,23 @@ except Exception:
     # 静默失败，不影响插件加载
     pass
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro
 
 # ComfyUI 节点注册
 NODE_CLASS_MAPPINGS = {
     "NanoBananaPro": NanoBananaPro,
     "BatchNanoBananaPro": BatchNanoBananaPro,
     "GoogleGemini": GoogleGemini,
-    "LoadFile": LoadFile
+    "LoadFile": LoadFile,
+    "ImageStitchPro": ImageStitchPro,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "NanoBananaPro": "Nano Banana Pro",
     "BatchNanoBananaPro": "批量 Nano Banana Pro",
     "GoogleGemini": "Google Gemini",
-    "LoadFile": "加载文件"
+    "LoadFile": "加载文件",
+    "ImageStitchPro": "图像拼接 Pro",
 }
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
