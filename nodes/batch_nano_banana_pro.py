@@ -26,7 +26,11 @@ from ..utils.file_utils import (
     save_image
 )
 from ..clients.gemini_client import GeminiAPIClient
-from ..models_config import get_enabled_models
+from ..models_config import (
+    get_enabled_models,
+    get_model_supported_aspect_ratios, get_all_supported_aspect_ratios,
+    get_model_supported_resolutions, get_all_supported_resolutions
+)
 
 # 导入 ComfyUI 原生进度条
 try:
@@ -68,14 +72,16 @@ class BatchNanoBananaPro:
     # 支持的模型列表（从配置文件动态加载）
     MODELS = None  # 将在 INPUT_TYPES 中动态获取
     
-    # 支持的宽高比列表
+    # 支持的宽高比列表（全量：所有启用模型的并集，动态加载）
+    # 实际渲染时通过 get_all_supported_aspect_ratios() 获取
     ASPECT_RATIOS = [
         "1:1", "4:3", "3:4", "16:9", "9:16",
-        "2:3", "3:2", "4:5", "5:4", "21:9"
+        "2:3", "3:2", "4:5", "5:4", "21:9",
+        "1:4", "4:1", "1:8", "8:1"
     ]
     
-    # 支持的分辨率列表
-    RESOLUTIONS = ["1K", "2K", "4K"]
+    # 支持的分辨率列表（全量兜底，实际由 get_all_supported_resolutions() 动态生成）
+    RESOLUTIONS = ["512", "1K", "2K", "4K"]
     
     # 配对模式
     PAIRING_MODES = ["1:1", "1*N", "不配对"]
@@ -142,6 +148,16 @@ class BatchNanoBananaPro:
         if not enabled_models:
             enabled_models = ["请在 models_config.py 中启用至少一个模型"]
         
+        # 动态获取所有启用模型支持的宽高比（去重合并）
+        all_aspect_ratios = get_all_supported_aspect_ratios()
+        if not all_aspect_ratios:
+            all_aspect_ratios = cls.ASPECT_RATIOS
+        
+        # 动态获取所有启用模型支持的分辨率（去重合并）
+        all_resolutions = get_all_supported_resolutions()
+        if not all_resolutions:
+            all_resolutions = cls.RESOLUTIONS
+        
         # 创建9个独立的图像输入
         optional_inputs = {}
         for i in range(1, 10):  # 1-9
@@ -161,10 +177,10 @@ class BatchNanoBananaPro:
                 "模型": (enabled_models, {
                     "default": enabled_models[0]
                 }),
-                "宽高比": (cls.ASPECT_RATIOS, {
+                "宽高比": (all_aspect_ratios, {
                     "default": "1:1"
                 }),
-                "分辨率": (cls.RESOLUTIONS, {
+                "分辨率": (all_resolutions, {
                     "default": "2K"
                 }),
                 "像素缩放": ("BOOLEAN", {
@@ -612,6 +628,22 @@ class BatchNanoBananaPro:
             )
             if not has_any_folder:
                 raise ValueError("请至少填写一个文件夹路径，该节点专为批量文件夹处理设计")
+            
+            # 校验分辨率与模型的兼容性
+            supported_resolutions = get_model_supported_resolutions(模型)
+            if supported_resolutions and 分辨率 not in supported_resolutions:
+                raise ValueError(
+                    f"分辨率 \"{分辨率}\" 与模型 \"{模型}\" 不兼容！\n"
+                    f"该模型支持的分辨率：{', '.join(supported_resolutions)}"
+                )
+            
+            # 校验宽高比与模型的兼容性
+            supported_ratios = get_model_supported_aspect_ratios(模型)
+            if supported_ratios and 宽高比 not in supported_ratios:
+                raise ValueError(
+                    f"宽高比 \"{宽高比}\" 与模型 \"{模型}\" 不兼容！\n"
+                    f"该模型支持的宽高比：{', '.join(supported_ratios)}"
+                )
             
             # 加载文件夹图片
             print("BatchNanoBananaPro: 开始加载图片...")

@@ -8,7 +8,7 @@
     3. 重新启用模型: 将模型的 enabled 字段改回 True
 
 模型类型:
-    - GEMINI_MODELS: Nano Banana Pro 图像生成模型
+    - GEMINI_MODELS: Nano Banana 图像生成模型
     - GEMINI_FLASH_MODELS: Google Gemini Flash 文本生成模型
 
 示例:
@@ -39,7 +39,7 @@ from typing import List, Dict, Optional
 # ============================================================
 
 # ============================================================
-# Nano Banana Pro 图像生成模型
+# Nano Banana 图像生成模型
 # ============================================================
 
 GEMINI_MODELS = [
@@ -48,14 +48,46 @@ GEMINI_MODELS = [
         "description": "Nano Banana Pro,根据分辨率自动选择端点 (1K/2K/4K),高性能图像生成模型",
         "enabled": True,
         "endpoint_type": "dynamic",
-        "endpoint": None  # 动态端点，由代码根据分辨率选择
+        "endpoint": None,  # 动态端点，由代码根据分辨率选择
+        "supported_aspect_ratios": [
+            "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+        ],
+        "supported_resolutions": ["1K", "2K", "4K"]
+    },
+    {
+        "id": "nano-banana-2",
+        "description": "Nano Banana 2，固定端点，图像生成模型",
+        "enabled": True,
+        "endpoint_type": "standard",
+        "endpoint": "/v1beta/models/nano-banana-2:generateContent",
+        "supported_aspect_ratios": [
+            "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4",
+            "8:1", "9:16", "16:9", "21:9"
+        ],
+        "supported_resolutions": ["512", "1K", "2K", "4K"]
     },
     {
         "id": "gemini-3-pro-image-preview",
         "description": "标准模式,固定端点,适用于常规图像生成",
         "enabled": True,
         "endpoint_type": "standard",
-        "endpoint": "/v1beta/models/gemini-3-pro-image-preview:generateContent"
+        "endpoint": "/v1beta/models/gemini-3-pro-image-preview:generateContent",
+        "supported_aspect_ratios": [
+            "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+        ],
+        "supported_resolutions": ["1K", "2K", "4K"]
+    },
+    {
+        "id": "gemini-3.1-flash-image-preview",
+        "description": "Gemini 3.1 Flash 图像生成,固定端点,快速图像生成模型",
+        "enabled": True,
+        "endpoint_type": "standard",
+        "endpoint": "/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+        "supported_aspect_ratios": [
+            "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4",
+            "8:1", "9:16", "16:9", "21:9"
+        ],
+        "supported_resolutions": ["512", "1K", "2K", "4K"]
     }
 ]
 
@@ -198,6 +230,94 @@ def get_model_description(model_id: str) -> str:
     if config is None:
         return ""
     return config.get("description", "")
+
+
+def get_model_supported_aspect_ratios(model_id: str) -> List[str]:
+    """
+    获取模型支持的宽高比列表
+
+    Args:
+        model_id: 模型 ID
+
+    Returns:
+        支持的宽高比字符串列表，如果未配置则返回空列表
+
+    Example:
+        >>> get_model_supported_aspect_ratios("gemini-3-pro-image-preview")
+        ['1:1', '2:3', '3:2', ...]
+    """
+    config = get_model_config(model_id)
+    if config is None:
+        return []
+    return config.get("supported_aspect_ratios", [])
+
+
+def get_all_supported_aspect_ratios() -> List[str]:
+    """
+    获取所有启用模型支持的宽高比（去重合并）
+
+    Returns:
+        所有启用模型支持的宽高比列表（保持顺序、去重）
+
+    Example:
+        >>> get_all_supported_aspect_ratios()
+        ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '4:5', '5:4', '21:9', '1:4', '4:1', '1:8', '8:1']
+    """
+    seen = set()
+    result = []
+    for model in GEMINI_MODELS:
+        if not model.get("enabled", False):
+            continue
+        for ratio in model.get("supported_aspect_ratios", []):
+            if ratio not in seen:
+                seen.add(ratio)
+                result.append(ratio)
+    return result
+
+
+def get_model_supported_resolutions(model_id: str) -> List[str]:
+    """
+    获取模型支持的分辨率列表
+
+    Args:
+        model_id: 模型 ID
+
+    Returns:
+        支持的分辨率字符串列表，如果未配置则返回空列表
+
+    Example:
+        >>> get_model_supported_resolutions("gemini-3.1-flash-image-preview")
+        ['512', '1K', '2K', '4K']
+        >>> get_model_supported_resolutions("gemini-3-pro-image-preview")
+        ['1K', '2K', '4K']
+    """
+    config = get_model_config(model_id)
+    if config is None:
+        return []
+    return config.get("supported_resolutions", [])
+
+
+def get_all_supported_resolutions() -> List[str]:
+    """
+    获取所有启用模型支持的分辨率（去重合并，按从小到大固定顺序排列）
+
+    Returns:
+        所有启用模型支持的分辨率列表（按 512 → 1K → 2K → 4K 顺序）
+
+    Example:
+        >>> get_all_supported_resolutions()
+        ['512', '1K', '2K', '4K']
+    """
+    _ORDER = ["512", "1K", "2K", "4K"]
+
+    seen = set()
+    for model in GEMINI_MODELS:
+        if not model.get("enabled", False):
+            continue
+        for res in model.get("supported_resolutions", []):
+            seen.add(res)
+
+    return [res for res in _ORDER if res in seen]
 
 
 def get_endpoint_type(model_id: str) -> Optional[str]:

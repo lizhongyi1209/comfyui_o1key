@@ -33,8 +33,8 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NanoBananaPro": "Nano Banana Pro",
-    "BatchNanoBananaPro": "批量 Nano Banana Pro",
+    "NanoBananaPro": "Nano Banana",
+    "BatchNanoBananaPro": "批量 Nano Banana",
     "GoogleGemini": "Google Gemini",
     "LoadFile": "加载文件",
     "ImageStitchPro": "图像拼接 Pro",
