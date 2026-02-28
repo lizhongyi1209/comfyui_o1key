@@ -366,6 +366,83 @@ def get_model_endpoint(model_id: str) -> Optional[str]:
 # Gemini Flash 模型工具函数
 # ============================================================
 
+# ============================================================
+# Sora 视频生成模型
+# ============================================================
+
+SORA_MODELS = [
+    {
+        "id": "sora-2",
+        "description": "Sora 2，视频生成模型，支持文生视频和图生视频",
+        "enabled": True,
+        "supported_seconds": [4, 8, 12],
+        "supported_sizes": ["720x1280", "1280x720", "1024x1792", "1792x1024"],
+    },
+]
+
+
+# ============================================================
+# Sora 模型工具函数
+# ============================================================
+
+def get_enabled_sora_models() -> List[str]:
+    """获取所有启用的 Sora 模型 ID 列表"""
+    return [model["id"] for model in SORA_MODELS if model.get("enabled", False)]
+
+
+def get_sora_model_config(model_id: str) -> Optional[Dict]:
+    """根据模型 ID 获取 Sora 模型的完整配置"""
+    for model in SORA_MODELS:
+        if model["id"] == model_id:
+            return model
+    return None
+
+
+def get_sora_supported_seconds(model_id: str) -> List[int]:
+    """获取 Sora 模型支持的视频时长列表（秒）"""
+    config = get_sora_model_config(model_id)
+    if config is None:
+        return []
+    return config.get("supported_seconds", [])
+
+
+def get_sora_supported_sizes(model_id: str) -> List[str]:
+    """获取 Sora 模型支持的分辨率列表"""
+    config = get_sora_model_config(model_id)
+    if config is None:
+        return []
+    return config.get("supported_sizes", [])
+
+
+def get_all_sora_seconds() -> List[int]:
+    """获取所有启用 Sora 模型支持的时长（去重、升序）"""
+    seen = set()
+    for model in SORA_MODELS:
+        if not model.get("enabled", False):
+            continue
+        for s in model.get("supported_seconds", []):
+            seen.add(s)
+    return sorted(seen)
+
+
+def get_all_sora_sizes() -> List[str]:
+    """获取所有启用 Sora 模型支持的分辨率（去重、保持顺序）"""
+    seen = set()
+    result = []
+    for model in SORA_MODELS:
+        if not model.get("enabled", False):
+            continue
+        for size in model.get("supported_sizes", []):
+            if size not in seen:
+                seen.add(size)
+                result.append(size)
+    return result
+
+
+# ============================================================
+# Gemini Flash 模型工具函数
+# ============================================================
+
 def get_enabled_flash_models() -> List[str]:
     """
     获取所有启用的 Flash 模型 ID 列表

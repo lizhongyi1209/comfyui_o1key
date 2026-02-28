@@ -9,5 +9,7 @@ from .google_gemini import GoogleGemini
 from .load_file import LoadFile
 from .image_stitch_pro import ImageStitchPro
 from .remove_metadata import SaveCleanImage, BatchCleanMetadata
+from .sora_video import SoraVideo
+from .video_preview import VideoPreview
 
-__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata']
+__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'SoraVideo', 'VideoPreview']

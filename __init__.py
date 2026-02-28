@@ -19,7 +19,7 @@ except Exception:
     # 静默失败，不影响插件加载
     pass
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, SoraVideo, VideoPreview
 
 # ComfyUI 节点注册
 NODE_CLASS_MAPPINGS = {
@@ -30,6 +30,8 @@ NODE_CLASS_MAPPINGS = {
     "ImageStitchPro": ImageStitchPro,
     "SaveCleanImage": SaveCleanImage,
     "BatchCleanMetadata": BatchCleanMetadata,
+    "SoraVideo": SoraVideo,
+    "VideoPreview": VideoPreview,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -40,6 +42,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageStitchPro": "图像拼接 Pro",
     "SaveCleanImage": "保存图像（防AI识别）",
     "BatchCleanMetadata": "批量任务（防AI识别）",
+    "SoraVideo": "Sora 视频生成",
+    "VideoPreview": "视频预览",
 }
 
-__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
+WEB_DIRECTORY = "./web"
+
+__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
