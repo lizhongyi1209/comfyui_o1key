@@ -4,10 +4,11 @@ Sora 视频生成 API 客户端
 """
 
 import asyncio
+import base64
 import json
 import os
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import aiohttp
 
@@ -62,37 +63,64 @@ class SoraClient(BaseAPIClient):
         model: str,
         seconds: int = 4,
         size: str = "720x1280",
-        input_reference_base64: Optional[str] = None,
+        input_reference_bytes: Optional[bytes] = None,
+        seed: Optional[int] = None,
         session: Optional[aiohttp.ClientSession] = None,
     ) -> Dict[str, Any]:
         """
         提交视频生成任务
 
-        使用 multipart/form-data 格式发送请求。
-        如果有参考图片，以 base64 字符串作为表单字段值。
+        格式策略（根据抓包确认）：
+        - 无参考图片：application/json
+        - 有参考图片：multipart/form-data，input_reference 以 PNG 文件上传
+
+        注意：seed 不被上游 API 接受，仅在 ComfyUI 节点侧用于缓存刷新
 
         Returns:
             API 响应 JSON，包含 video id 和初始状态
         """
         url = f"{self.base_url}{self.CREATE_ENDPOINT}"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Authorization": f"Bearer {self.api_key}"}
 
-        form = aiohttp.FormData()
-        form.add_field("model", model)
-        form.add_field("prompt", prompt)
-        form.add_field("seconds", str(seconds))
-        form.add_field("size", size)
-
-        if input_reference_base64:
-            estimated_size = len(input_reference_base64.encode("utf-8"))
-            if estimated_size > self.max_request_size:
+        # ============================================================
+        # ⚠️  已验证可用的标准请求方案，请勿随意修改！（2026-02-28）
+        # ============================================================
+        # 经多轮调试确认：
+        #   - 有图片：必须使用 multipart/form-data，input_reference 以 PNG 文件上传
+        #     · filename="reference.png", content_type="image/png"（与抓包一致）
+        #     · 不可改为 application/json + base64 → 400 "expected a file, got a string"
+        #     · 不可改为 application/json + data URI → 500 upstream error
+        #     · 不可改为 multipart + image/jpeg     → 400 "Inpaint image must match..."（尺寸校验失败）
+        #   - 无图片：使用 application/json，已验证成功
+        # ============================================================
+        if input_reference_bytes:
+            if len(input_reference_bytes) > self.max_request_size:
                 raise ValueError(
-                    f"参考图片 base64 编码后约 {estimated_size / 1024 / 1024:.1f}MB，"
-                    f"超过 20MB 限制，请使用较小的图片"
+                    f"参考图片约 {len(input_reference_bytes) / 1024 / 1024:.1f}MB，"
+                    f"超过 {self.max_request_size / 1024 / 1024:.0f}MB 限制，请使用较小的图片"
                 )
-            form.add_field("input_reference", input_reference_base64)
+            # ⚠️ 有图片：multipart/form-data + PNG 文件上传（唯一验证成功的方案）
+            form = aiohttp.FormData()
+            form.add_field("prompt", prompt)
+            form.add_field("model", model)
+            form.add_field("seconds", str(seconds))
+            form.add_field("size", size)
+            form.add_field(
+                "input_reference",
+                input_reference_bytes,
+                filename="reference.png",   # ⚠️ 不可改文件名/扩展名
+                content_type="image/png",   # ⚠️ 不可改为 image/jpeg
+            )
+            send_kwargs: Dict[str, Any] = {"data": form, "headers": headers}
+        else:
+            # ⚠️ 无图片：application/json（已验证成功）
+            body: Dict[str, Any] = {
+                "model": model,
+                "prompt": prompt,
+                "seconds": str(seconds),
+                "size": size,
+            }
+            send_kwargs = {"json": body, "headers": headers}
 
         close_session = False
         if session is None:
@@ -100,13 +128,14 @@ class SoraClient(BaseAPIClient):
             close_session = True
 
         try:
-            async with session.post(url, data=form, headers=headers) as response:
+            async with session.post(url, **send_kwargs) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     error_message = self._extract_error_message(error_text, response.status)
                     raise RuntimeError(error_message)
 
-                return await response.json()
+                resp_json = await response.json()
+                return resp_json
 
         finally:
             if close_session:
@@ -159,8 +188,18 @@ class SoraClient(BaseAPIClient):
 
                     data = await response.json()
 
-                status = data.get("status", "")
-                progress = data.get("progress", 0)
+                # status 兼容大小写：queued / in_progress / IN_PROGRESS / completed / COMPLETED
+                status = data.get("status", "").lower()
+
+                # progress 兼容整数 (30) 和字符串 ("30%") 两种格式
+                progress_raw = data.get("progress", 0)
+                if isinstance(progress_raw, str):
+                    try:
+                        progress = int(progress_raw.rstrip("%").strip())
+                    except ValueError:
+                        progress = 0
+                else:
+                    progress = int(progress_raw) if progress_raw else 0
 
                 if progress_callback:
                     progress_callback(progress, elapsed)
@@ -242,7 +281,8 @@ class SoraClient(BaseAPIClient):
         seconds: int,
         size: str,
         save_path: str,
-        input_reference_base64: Optional[str] = None,
+        input_reference_bytes: Optional[bytes] = None,
+        seed: Optional[int] = None,
         progress_callback: Optional[Callable[[int, float], None]] = None,
         on_stage: Optional[Callable[[str], None]] = None,
     ) -> str:
@@ -267,7 +307,8 @@ class SoraClient(BaseAPIClient):
                     model=model,
                     seconds=seconds,
                     size=size,
-                    input_reference_base64=input_reference_base64,
+                    input_reference_bytes=input_reference_bytes,
+                    seed=seed,
                     session=session,
                 )
                 video_id = result.get("id")
@@ -300,6 +341,144 @@ class SoraClient(BaseAPIClient):
                 return path
 
         return self.run_async_in_thread(_run())
+
+    async def _generate_one_video_async(
+        self,
+        prompt: str,
+        model: str,
+        seconds: int,
+        size: str,
+        save_path: str,
+        input_reference_bytes: Optional[bytes] = None,
+        seed: Optional[int] = None,
+        session: Optional[aiohttp.ClientSession] = None,
+    ) -> str:
+        """
+        异步生成单个视频（创建 → 轮询 → 下载）
+
+        Returns:
+            保存的视频文件路径
+        """
+        result = await self.create_video_async(
+            prompt=prompt,
+            model=model,
+            seconds=seconds,
+            size=size,
+            input_reference_bytes=input_reference_bytes,
+            seed=seed,
+            session=session,
+        )
+        video_id = result.get("id")
+        if not video_id:
+            raise RuntimeError("API 未返回视频任务 ID")
+
+        await self.poll_video_status_async(video_id=video_id, session=session)
+        path = await self.download_video_async(
+            video_id=video_id, save_path=save_path, session=session
+        )
+        return path
+
+    async def generate_batch_videos_async(
+        self,
+        prompt: str,
+        model: str,
+        seconds: int,
+        size: str,
+        save_paths: List[str],
+        input_reference_bytes: Optional[bytes] = None,
+        seed: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None,
+    ) -> List[str]:
+        """
+        并发生成多个视频
+
+        Args:
+            prompt: 提示词
+            model: 模型名称
+            seconds: 视频时长（秒）
+            size: 分辨率
+            save_paths: 各视频的保存路径列表，长度决定并发数量
+            input_reference_bytes: 参考图片字节（可选）
+            seed: 随机种子（仅节点侧使用）
+            progress_callback: 进度回调 (current, total, success, error_msg)
+
+        Returns:
+            成功生成的视频路径列表
+        """
+        batch_size = len(save_paths)
+        connector = aiohttp.TCPConnector(limit=0)
+
+        async with aiohttp.ClientSession(connector=connector) as session:
+            tasks = [
+                self._generate_one_video_async(
+                    prompt=prompt,
+                    model=model,
+                    seconds=seconds,
+                    size=size,
+                    save_path=save_paths[i],
+                    input_reference_bytes=input_reference_bytes,
+                    seed=seed,
+                    session=session,
+                )
+                for i in range(batch_size)
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        completed = 0
+        paths: List[str] = []
+        first_error = None
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                error_msg = str(result).split("\n")[0]
+                print(f"Sora: 第 {i + 1} 个视频生成失败: {error_msg}")
+                if first_error is None:
+                    first_error = result
+                if progress_callback:
+                    progress_callback(i + 1, batch_size, False, error_msg)
+            else:
+                completed += 1
+                paths.append(result)
+                if progress_callback:
+                    progress_callback(completed, batch_size, True, None)
+
+        if not paths:
+            if first_error:
+                raise first_error
+            raise RuntimeError(f"批量视频生成失败，{batch_size} 个任务全部失败")
+
+        return paths
+
+    def generate_batch_videos_sync(
+        self,
+        prompt: str,
+        model: str,
+        seconds: int,
+        size: str,
+        save_paths: List[str],
+        input_reference_bytes: Optional[bytes] = None,
+        seed: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None,
+    ) -> List[str]:
+        """
+        同步并发生成多个视频（用于 ComfyUI 节点）
+
+        Args:
+            save_paths: 各视频的保存路径列表，长度决定并发数量
+
+        Returns:
+            成功生成的视频路径列表
+        """
+        coro = self.generate_batch_videos_async(
+            prompt=prompt,
+            model=model,
+            seconds=seconds,
+            size=size,
+            save_paths=save_paths,
+            input_reference_bytes=input_reference_bytes,
+            seed=seed,
+            progress_callback=progress_callback,
+        )
+        return self.run_async_in_thread(coro)
 
     # ------------------------------------------------------------------
     # 内部辅助方法

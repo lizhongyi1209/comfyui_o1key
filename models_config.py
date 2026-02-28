@@ -376,7 +376,7 @@ SORA_MODELS = [
         "description": "Sora 2，视频生成模型，支持文生视频和图生视频",
         "enabled": True,
         "supported_seconds": [4, 8, 12],
-        "supported_sizes": ["720x1280", "1280x720", "1024x1792", "1792x1024"],
+        "supported_sizes": ["720x1280", "1280x720"],
     },
 ]
 

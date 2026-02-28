@@ -35,7 +35,7 @@ class VideoPreview:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "video_path": ("STRING", {"forceInput": True}),
+                "预览视频": ("STRING", {"forceInput": True}),
             },
         }
 
@@ -50,7 +50,8 @@ class VideoPreview:
         "支持 mp4, webm, mov, avi, mkv 等主流视频格式。"
     )
 
-    def preview(self, video_path: str) -> dict:
+    def preview(self, **kwargs) -> dict:
+        video_path = kwargs.get("预览视频", "")
         if not video_path or not video_path.strip():
             raise ValueError("视频路径为空")
 
