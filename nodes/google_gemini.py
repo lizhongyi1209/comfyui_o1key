@@ -406,3 +406,12 @@ class GoogleGemini:
             error_msg = str(e).split('\n')[0]
             print(f"Google Gemini: ❌ {error_msg}")
             raise type(e)(error_msg) from None
+        
+        finally:
+            if self.client is not None:
+                try:
+                    balance_data = self.client.query_balance_sync()
+                    balance_info = self.client.format_balance_info(balance_data)
+                    print(f"Google Gemini: {balance_info}")
+                except Exception:
+                    pass

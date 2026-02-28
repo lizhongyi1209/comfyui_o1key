@@ -454,3 +454,58 @@ class BaseAPIClient(ABC):
             raise RuntimeError("异步任务未返回结果")
         
         return result_container[0]
+    
+    async def query_balance_async(self) -> Dict[str, Any]:
+        """
+        异步查询账户余额
+        
+        Returns:
+            余额信息字典，包含 name、total_available 等字段
+        
+        Raises:
+            RuntimeError: 查询失败时
+        """
+        endpoint = "/api/usage/token"
+        response = await self.request_get_async(endpoint, use_bearer_token=True)
+        
+        if not response.get("code"):
+            raise RuntimeError("余额查询响应格式错误")
+        
+        data = response.get("data", {})
+        return data
+    
+    def query_balance_sync(self) -> Dict[str, Any]:
+        """
+        同步查询账户余额（用于 ComfyUI 节点）
+        
+        Returns:
+            余额信息字典
+        
+        Raises:
+            RuntimeError: 查询失败时
+        """
+        coro = self.query_balance_async()
+        return self.run_async_in_thread(coro)
+    
+    def format_balance_info(self, balance_data: Dict[str, Any]) -> str:
+        """
+        格式化余额信息为展示文本
+        
+        Args:
+            balance_data: 余额信息字典
+        
+        Returns:
+            格式化文本，如 "当前余额：$100.00 | API：xxx"
+        
+        Example:
+            >>> data = {"name": "test-api", "total_available": 50000000}
+            >>> client.format_balance_info(data)
+            '当前余额：$100.00 | API：test-api'
+        """
+        api_name = balance_data.get("name", "未知")
+        total_available = balance_data.get("total_available", 0)
+        
+        # 实际显示余额 = total_available / 500000，单位：美元
+        balance_in_dollars = total_available / 500000
+        
+        return f"当前余额：${balance_in_dollars:.2f} | API：{api_name}"

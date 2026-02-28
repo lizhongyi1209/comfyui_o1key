@@ -418,12 +418,10 @@ class NanoBananaPro:
             raise type(e)(error_msg) from None
         
         finally:
-            # 余额查询功能已停用（代码保留）
-            # if self.client is not None:
-            #     try:
-            #         balance_data = self.client.query_balance_sync()
-            #         balance_info = self.client.format_balance_info(balance_data)
-            #         print(f"Nano Banana Pro: {balance_info}")
-            #     except Exception as e:
-            #         print(f"Nano Banana Pro: ⚠️ 余额查询失败 - {str(e)}")
-            pass
+            if self.client is not None:
+                try:
+                    balance_data = self.client.query_balance_sync()
+                    balance_info = self.client.format_balance_info(balance_data)
+                    print(f"Nano Banana Pro: {balance_info}")
+                except Exception:
+                    pass
