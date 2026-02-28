@@ -10,6 +10,7 @@ import torch
 from PIL import Image
 
 from ..utils.image_utils import tensor_to_pil, pil_to_tensor
+from ..utils.file_utils import load_images_from_folder
 
 
 # 间隔颜色映射
@@ -111,6 +112,14 @@ def _stitch_two(img_a: Image.Image, img_b: Image.Image,
     return canvas
 
 
+def _natural_sort_key(filename: str):
+    """按数字优先的文件名排序，使 1, 2, 3, 10 而非 1, 10, 2, 3"""
+    try:
+        return (0, int(filename))
+    except ValueError:
+        return (1, filename.lower())
+
+
 class ImageStitchPro:
     """
     高级图像拼接节点
@@ -123,13 +132,13 @@ class ImageStitchPro:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "图1": ("IMAGE",),
                 "方向": (["right", "down", "left", "up"], {"default": "down"}),
                 "匹配图像尺寸": ("BOOLEAN", {"default": True}),
                 "间距宽度": ("INT", {"default": 0, "min": 0, "max": 1024, "step": 2}),
                 "间距颜色": (["white", "black", "red", "green", "blue"], {"default": "white"}),
             },
             "optional": {
+                "图1": ("IMAGE",),
                 "图2":  ("IMAGE",),
                 "图3":  ("IMAGE",),
                 "图4":  ("IMAGE",),
@@ -141,6 +150,7 @@ class ImageStitchPro:
                 "图10": ("IMAGE",),
                 "图11": ("IMAGE",),
                 "图12": ("IMAGE",),
+                "图片路径（可选）": ("STRING", {"default": "", "multiline": False}),
             },
         }
 
@@ -151,16 +161,17 @@ class ImageStitchPro:
 
     DESCRIPTION = (
         "高级图像拼接节点，支持最多 12 张图像按指定方向（右/下/左/上）依次拼接。\n"
-        "可选择是否将后续图像缩放以匹配第一张图像的尺寸，并可在图像间添加彩色间隔。"
+        "可选择是否将后续图像缩放以匹配第一张图像的尺寸，并可在图像间添加彩色间隔。\n"
+        "可选填「图片路径」：仅处理该文件夹内图片，按文件名顺序依次拼接；与输入端图片不可同时使用。"
     )
 
     def stitch(
         self,
-        图1: torch.Tensor,
         方向: str = "down",
         匹配图像尺寸: bool = True,
         间距宽度: int = 0,
         间距颜色: str = "white",
+        图1:  Optional[torch.Tensor] = None,
         图2:  Optional[torch.Tensor] = None,
         图3:  Optional[torch.Tensor] = None,
         图4:  Optional[torch.Tensor] = None,
@@ -172,12 +183,39 @@ class ImageStitchPro:
         图10: Optional[torch.Tensor] = None,
         图11: Optional[torch.Tensor] = None,
         图12: Optional[torch.Tensor] = None,
+        **kwargs: object,
     ) -> Tuple[torch.Tensor]:
 
         color = SPACING_COLOR_MAP.get(间距颜色, (255, 255, 255))
-
         raw_tensors = [图1, 图2, 图3, 图4, 图5, 图6, 图7, 图8, 图9, 图10, 图11, 图12]
         tensors = [t for t in raw_tensors if t is not None]
+        has_input_images = len(tensors) > 0
+        image_folder = (kwargs.get("图片路径（可选）") or "").strip()
+
+        if image_folder and has_input_images:
+            raise ValueError("不可同时使用「图片路径（可选）」与输入端图片，请二选一。")
+
+        if image_folder:
+            infos = load_images_from_folder(image_folder)
+            if not infos:
+                raise ValueError(f"文件夹中未找到可用的图片，或路径无效: {image_folder}")
+            infos.sort(key=lambda x: _natural_sort_key(x.filename))
+            pil_list = [info.image for info in infos]
+            if len(pil_list) == 1:
+                return (pil_to_tensor(pil_list),)
+            base = pil_list[0]
+            for next_img in pil_list[1:]:
+                base = _stitch_two(
+                    base, next_img,
+                    direction=方向,
+                    match_size=匹配图像尺寸,
+                    spacing_width=间距宽度,
+                    spacing_color=color,
+                )
+            return (pil_to_tensor([base]),)
+        else:
+            if not has_input_images:
+                raise ValueError("请至少接入一张图片，或填写「图片路径（可选）」中的文件夹路径。")
 
         if len(tensors) == 1:
             return (tensors[0],)
