@@ -43,9 +43,12 @@ except ImportError:
 # ============================================================================
 # 调试日志配置
 # ============================================================================
-# 是否启用调试日志（打印完整的 API 请求和响应内容）
+# 是否启用调试日志（打印完整的 API 响应内容）
 # 设置为 True 以启用调试日志，False 以禁用
 DEBUG_LOG_ENABLED = False
+# 是否启用请求体日志（打印发送给 API 的请求体，base64 图片数据将自动截断）
+# 设置为 True 以启用请求体日志，False 以禁用
+REQUEST_LOG_ENABLED = False
 # ============================================================================
 
 
@@ -401,7 +404,8 @@ class BatchNanoBananaPro:
                     aspect_ratio=aspect_ratio,
                     images=input_pil_images,
                     session=session,
-                    debug=DEBUG_LOG_ENABLED
+                    debug=DEBUG_LOG_ENABLED,
+                    debug_request=REQUEST_LOG_ENABLED
                 )
                 if gen_result:
                     # 正确解包元组：第一个元素是图像列表，第二个是计时信息

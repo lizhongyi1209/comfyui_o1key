@@ -30,9 +30,12 @@ except ImportError:
 # ============================================================================
 # 调试日志配置
 # ============================================================================
-# 是否启用调试日志（打印完整的 API 请求和响应内容）
+# 是否启用调试日志（打印完整的 API 响应内容）
 # 设置为 True 以启用调试日志，False 以禁用
 DEBUG_LOG_ENABLED = False
+# 是否启用请求体日志（打印发送给 API 的请求体，base64 图片数据将自动截断）
+# 设置为 True 以启用请求体日志，False 以禁用
+REQUEST_LOG_ENABLED = False
 # ============================================================================
 
 
@@ -121,7 +124,7 @@ class NanoBananaPro:
                     "step": 1
                 }),
                 "像素缩放": ("BOOLEAN", {
-                    "default": False
+                    "default": True
                 }),
                 "分辨率像素": ("FLOAT", {
                     "default": 1.0,
@@ -129,6 +132,12 @@ class NanoBananaPro:
                     "max": 100.0,
                     "step": 0.1,
                     "display": "number"
+                }),
+                "谷歌搜索（联网）": ("BOOLEAN", {
+                    "default": True
+                }),
+                "图片搜索（联网）": ("BOOLEAN", {
+                    "default": False
                 }),
                 "seed": ("INT", {
                     "default": 0,
@@ -244,7 +253,8 @@ class NanoBananaPro:
             像素缩放: 是否启用像素缩放
             分辨率像素: 目标像素数（百万像素）
             seed: 随机种子
-            **kwargs: 动态参考图输入 (参考图1-9)
+            **kwargs: 搜索开关（谷歌搜索（联网）/ 图片搜索（联网））及动态参考图输入 (参考图1-9)
+                      注：两个搜索参数名含全角括号，不能作为 Python 形参，从 kwargs 中提取
             
         注意：
             调试日志功能已移至文件顶部配置，通过修改 DEBUG_LOG_ENABLED 常量控制
@@ -253,6 +263,10 @@ class NanoBananaPro:
             生成的图像张量 (IMAGE,)
         """
         start_time = time.time()
+        
+        # 从 kwargs 提取搜索参数（参数名含全角括号，无法直接声明为 Python 形参）
+        enable_grounding: bool = kwargs.pop("谷歌搜索（联网）", True)
+        enable_image_search: bool = kwargs.pop("图片搜索（联网）", False)
         
         # 创建 ComfyUI 原生进度条
         pbar = None
@@ -287,6 +301,15 @@ class NanoBananaPro:
                     f"该模型支持的宽高比：{', '.join(supported_ratios)}"
                 )
             
+            # 校验图片搜索（联网）与模型的兼容性
+            # 仅 nano-banana-2 和 gemini-3.1-flash-image-preview 支持图片搜索
+            IMAGE_SEARCH_UNSUPPORTED_MODELS = ["nano-banana-pro", "gemini-3-pro-image-preview"]
+            if enable_image_search and 模型 in IMAGE_SEARCH_UNSUPPORTED_MODELS:
+                raise ValueError(
+                    f"模型 \"{模型}\" 不支持【图片搜索（联网）】功能！"
+                    f"请切换到 nano-banana-2 或 gemini-3.1-flash-image-preview 后再使用"
+                )
+            
             # 收集独立输入的参考图
             input_images = []
             for i in range(1, 10):  # 1-9
@@ -314,6 +337,13 @@ class NanoBananaPro:
             batch_prompts = parse_batch_prompts(prompt)
             
             # 打印首行概览
+            # 图片搜索（联网）开启时隐含谷歌搜索接地，与客户端请求逻辑保持一致
+            grounding_str = ""
+            if enable_image_search:
+                grounding_str = " | 谷歌图片搜索接地"
+            elif enable_grounding:
+                grounding_str = " | 谷歌搜索接地"
+            
             if batch_prompts:
                 # 批量提示词模式
                 num_prompts = len(batch_prompts)
@@ -321,11 +351,11 @@ class NanoBananaPro:
                 mode_str = f"批量提示词模式 ({num_prompts}个提示词)"
                 if input_images:
                     mode_str += f" (输入{len(input_images)}张)"
-                print(f"Nano Banana Pro: {mode_str} | {分辨率} {宽高比} | 共{total_images}张")
+                print(f"Nano Banana Pro: {mode_str} | {分辨率} {宽高比} | 共{total_images}张{grounding_str}")
             else:
                 # 单提示词模式
                 mode_str = f"图生图模式 (输入{len(input_images)}张)" if input_images else "文生图模式"
-                print(f"Nano Banana Pro: {mode_str} | {分辨率} {宽高比} | {生图数量}张")
+                print(f"Nano Banana Pro: {mode_str} | {分辨率} {宽高比} | {生图数量}张{grounding_str}")
             
             # 统计变量
             success_count = 0
@@ -361,7 +391,10 @@ class NanoBananaPro:
                     images_per_prompt=生图数量,
                     images=input_images,
                     progress_callback=progress_callback,
-                    debug=DEBUG_LOG_ENABLED
+                    debug=DEBUG_LOG_ENABLED,
+                    debug_request=REQUEST_LOG_ENABLED,
+                    enable_grounding=enable_grounding,
+                    enable_image_search=enable_image_search
                 )
             else:
                 # 单提示词模式
@@ -373,7 +406,10 @@ class NanoBananaPro:
                     batch_size=生图数量,
                     images=input_images,
                     progress_callback=progress_callback,
-                    debug=DEBUG_LOG_ENABLED
+                    debug=DEBUG_LOG_ENABLED,
+                    debug_request=REQUEST_LOG_ENABLED,
+                    enable_grounding=enable_grounding,
+                    enable_image_search=enable_image_search
                 )
             
             # 转换输出图像

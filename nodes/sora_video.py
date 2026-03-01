@@ -6,6 +6,7 @@ ComfyUI 自定义节点，调用 Sora API 生成视频
 import os
 import re
 import time
+from math import gcd
 from typing import Optional, Tuple
 
 import torch
@@ -32,6 +33,62 @@ try:
 except ImportError:
     PROGRESS_BAR_AVAILABLE = False
     print("⚠️ SoraVideo: comfy.utils.ProgressBar 不可用，将只使用终端进度显示")
+
+
+def _size_to_display(size: str) -> str:
+    """
+    将 'WxH' 格式的分辨率转换为友好显示名。
+
+    例如：
+        "720x1280"  → "720P  9:16"
+        "1280x720"  → "720P 16:9"
+        "1024x1792" → "1K  4:7"
+        "1792x1024" → "1K  7:4"
+
+    Args:
+        size: 分辨率字符串，格式 "WxH"
+
+    Returns:
+        友好显示名字符串
+    """
+    parts = size.lower().split("x")
+    w, h = int(parts[0]), int(parts[1])
+    short_side = min(w, h)
+    if short_side >= 3840:
+        res = "4K"
+    elif short_side >= 1920:
+        res = "2K"
+    elif short_side >= 1080:
+        res = "1K"
+    elif short_side >= 720:
+        res = "720P"
+    elif short_side >= 480:
+        res = "480P"
+    else:
+        res = f"{short_side}P"
+    g = gcd(w, h)
+    ratio = f"{w // g}:{h // g}"
+    return f"{res} {ratio} ({size})"
+
+
+def _build_size_display_map(sizes: list) -> dict:
+    """
+    构建 显示名 → 实际值 映射字典。
+
+    Args:
+        sizes: 实际分辨率列表，如 ["720x1280", "1280x720"]
+
+    Returns:
+        字典，key 为显示名，value 为实际分辨率字符串
+    """
+    mapping = {}
+    for size in sizes:
+        display = _size_to_display(size)
+        if display in mapping:
+            # 极少数情况下防止重名
+            display = f"{display} ({size})"
+        mapping[display] = size
+    return mapping
 
 
 def _get_video_output_dir() -> str:
@@ -195,6 +252,9 @@ class SoraVideo:
         all_sizes = get_all_sora_sizes()
         if not all_sizes:
             all_sizes = ["720x1280", "1280x720", "1024x1792", "1792x1024"]
+        # 将实际分辨率转换为友好显示名（"720x1280" → "720P 9:16"）
+        size_display_map = _build_size_display_map(all_sizes)
+        size_display_list = list(size_display_map.keys())
 
         return {
             "required": {
@@ -208,8 +268,8 @@ class SoraVideo:
                 "视频时长（秒）": (seconds_str, {
                     "default": "4",
                 }),
-                "分辨率": (all_sizes, {
-                    "default": all_sizes[0],
+                "分辨率": (size_display_list, {
+                    "default": size_display_list[0],
                 }),
                 "生成数量": ("INT", {
                     "default": 1,
@@ -246,8 +306,13 @@ class SoraVideo:
         **kwargs,
     ) -> Tuple[str]:
         视频时长 = kwargs.pop("视频时长（秒）", "4")
-        分辨率 = kwargs.pop("分辨率", "720x1280")
+        分辨率_label = kwargs.pop("分辨率", None)
         生成数量 = kwargs.pop("生成数量", 1)
+
+        # 将友好显示名（如 "720P 9:16"）反向映射回实际分辨率（如 "720x1280"）
+        _all_sizes = get_all_sora_sizes() or ["720x1280", "1280x720", "1024x1792", "1792x1024"]
+        _size_map = _build_size_display_map(_all_sizes)
+        分辨率 = _size_map.get(分辨率_label, 分辨率_label) if 分辨率_label else "720x1280"
         seed = kwargs.pop("seed", 0)
         start_time = time.time()
         seconds = int(视频时长)

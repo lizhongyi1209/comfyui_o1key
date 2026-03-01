@@ -86,6 +86,8 @@ class GeminiAPIClient(BaseAPIClient):
         images: Optional[List[Image.Image]] = None,
         aspect_ratio: str = "1:1",
         resolution: str = "2K",
+        enable_grounding: bool = False,
+        enable_image_search: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -96,6 +98,8 @@ class GeminiAPIClient(BaseAPIClient):
             images: 输入图像列表（可选）
             aspect_ratio: 宽高比
             resolution: 分辨率
+            enable_grounding: 是否启用 Google Search Grounding
+            enable_image_search: 是否同时启用 Google Image Search（仅 Gemini 3.1 Flash 支持）
         
         Returns:
             请求体字典
@@ -132,6 +136,25 @@ class GeminiAPIClient(BaseAPIClient):
                 }
             }
         }
+        
+        # 添加 Google Search Grounding 工具（如果启用）
+        # 注意：enable_image_search=True 时会自动隐含 enable_grounding
+        if enable_grounding or enable_image_search:
+            if enable_image_search:
+                # 同时启用网页搜索和图片搜索（仅 nano-banana-2 / gemini-3.1-flash-image-preview 支持）
+                request_body["tools"] = [
+                    {
+                        "google_search": {
+                            "searchTypes": {
+                                "webSearch": {},
+                                "imageSearch": {}
+                            }
+                        }
+                    }
+                ]
+            else:
+                # 仅启用网页搜索（通用）
+                request_body["tools"] = [{"google_search": {}}]
         
         return request_body
     
@@ -411,7 +434,10 @@ class GeminiAPIClient(BaseAPIClient):
         session=None,
         task_index: Optional[int] = None,
         total_tasks: Optional[int] = None,
-        debug: bool = False
+        debug: bool = False,
+        debug_request: bool = False,
+        enable_grounding: bool = False,
+        enable_image_search: bool = False
     ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
         单次异步生成请求（极简单行日志）
@@ -425,6 +451,10 @@ class GeminiAPIClient(BaseAPIClient):
             session: aiohttp 会话
             task_index: 任务索引（用于批量任务）
             total_tasks: 总任务数（用于批量任务）
+            debug: 是否打印完整 API 响应
+            debug_request: 是否打印发送的请求体（base64 图片数据将被截断）
+            enable_grounding: 是否启用 Google Search Grounding
+            enable_image_search: 是否同时启用 Google Image Search
         
         Returns:
             (生成的图像列表, 计时信息字典)
@@ -443,9 +473,35 @@ class GeminiAPIClient(BaseAPIClient):
             prompt=prompt,
             images=images,
             aspect_ratio=aspect_ratio,
-            resolution=resolution
+            resolution=resolution,
+            enable_grounding=enable_grounding,
+            enable_image_search=enable_image_search
         )
         build_time = time.time() - build_start
+        
+        # ========== 调试日志：打印请求体 ==========
+        if debug_request:
+            import json as _json
+            
+            def _truncate_base64_req(obj, max_len=200):
+                if isinstance(obj, dict):
+                    return {k: _truncate_base64_req(v, max_len) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [_truncate_base64_req(item, max_len) for item in obj]
+                elif isinstance(obj, str) and len(obj) > max_len:
+                    if all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in obj[:50]):
+                        return f"<base64 data, {len(obj)} chars>"
+                    return obj
+                return obj
+            
+            safe_request = _truncate_base64_req(request_body)
+            print(
+                f"\n{'='*60}\n"
+                f"[请求体日志] 任务 {task_prefix or '?'} 发送请求体：\n"
+                f"端点: {endpoint}\n"
+                f"{_json.dumps(safe_request, ensure_ascii=False, indent=2)}\n"
+                f"{'='*60}\n"
+            )
         
         # 计算请求体大小
         request_size = len(json.dumps(request_body).encode('utf-8'))
@@ -546,7 +602,10 @@ class GeminiAPIClient(BaseAPIClient):
         batch_size: int,
         images: Optional[List[Image.Image]] = None,
         progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None,
-        debug: bool = False
+        debug: bool = False,
+        debug_request: bool = False,
+        enable_grounding: bool = False,
+        enable_image_search: bool = False
     ) -> List[Image.Image]:
         """
         批量全并发生成
@@ -559,6 +618,10 @@ class GeminiAPIClient(BaseAPIClient):
             batch_size: 批次大小
             images: 输入图像列表
             progress_callback: 进度回调，签名为 (completed, total, success, error_msg)
+            debug: 是否打印完整 API 响应
+            debug_request: 是否打印发送的请求体
+            enable_grounding: 是否启用 Google Search Grounding
+            enable_image_search: 是否同时启用 Google Image Search
         
         Returns:
             生成的图像列表
@@ -588,7 +651,10 @@ class GeminiAPIClient(BaseAPIClient):
                         session=session,
                         task_index=i + 1,
                         total_tasks=batch_size,
-                        debug=debug
+                        debug=debug,
+                        debug_request=debug_request,
+                        enable_grounding=enable_grounding,
+                        enable_image_search=enable_image_search
                     ),
                     name=f"task_{i}"
                 )
@@ -633,7 +699,10 @@ class GeminiAPIClient(BaseAPIClient):
         batch_size: int,
         images: Optional[List[Image.Image]] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        debug: bool = False
+        debug: bool = False,
+        debug_request: bool = False,
+        enable_grounding: bool = False,
+        enable_image_search: bool = False
     ) -> List[Image.Image]:
         """
         同步生成接口（用于 ComfyUI）
@@ -646,6 +715,10 @@ class GeminiAPIClient(BaseAPIClient):
             batch_size: 批次大小
             images: 输入图像列表
             progress_callback: 进度回调
+            debug: 是否打印完整 API 响应
+            debug_request: 是否打印发送的请求体
+            enable_grounding: 是否启用 Google Search Grounding
+            enable_image_search: 是否同时启用 Google Image Search
         
         Returns:
             生成的图像列表
@@ -658,7 +731,10 @@ class GeminiAPIClient(BaseAPIClient):
             batch_size=batch_size,
             images=images,
             progress_callback=progress_callback,
-            debug=debug
+            debug=debug,
+            debug_request=debug_request,
+            enable_grounding=enable_grounding,
+            enable_image_search=enable_image_search
         )
         
         return self.run_async_in_thread(coro)
@@ -672,7 +748,10 @@ class GeminiAPIClient(BaseAPIClient):
         images_per_prompt: int,
         images: Optional[List[Image.Image]] = None,
         progress_callback: Optional[Callable[[int, int, bool, Optional[str]], None]] = None,
-        debug: bool = False
+        debug: bool = False,
+        debug_request: bool = False,
+        enable_grounding: bool = False,
+        enable_image_search: bool = False
     ) -> List[Image.Image]:
         """
         多提示词批量生成
@@ -687,6 +766,10 @@ class GeminiAPIClient(BaseAPIClient):
             images_per_prompt: 每个提示词生成的图像数量
             images: 输入图像列表（所有提示词共享）
             progress_callback: 进度回调，签名为 (completed, total, success, error_msg)
+            debug: 是否打印完整 API 响应
+            debug_request: 是否打印发送的请求体
+            enable_grounding: 是否启用 Google Search Grounding
+            enable_image_search: 是否同时启用 Google Image Search
         
         Returns:
             生成的图像列表（长度 = len(prompts) * images_per_prompt）
@@ -720,7 +803,10 @@ class GeminiAPIClient(BaseAPIClient):
                             session=session,
                             task_index=task_idx + 1,
                             total_tasks=total_tasks,
-                            debug=debug
+                            debug=debug,
+                            debug_request=debug_request,
+                            enable_grounding=enable_grounding,
+                            enable_image_search=enable_image_search
                         ),
                         name=f"task_{task_idx}"
                     )
@@ -766,7 +852,10 @@ class GeminiAPIClient(BaseAPIClient):
         images_per_prompt: int,
         images: Optional[List[Image.Image]] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        debug: bool = False
+        debug: bool = False,
+        debug_request: bool = False,
+        enable_grounding: bool = False,
+        enable_image_search: bool = False
     ) -> List[Image.Image]:
         """
         多提示词批量生成（同步接口，用于 ComfyUI）
@@ -779,6 +868,10 @@ class GeminiAPIClient(BaseAPIClient):
             images_per_prompt: 每个提示词生成的图像数量
             images: 输入图像列表
             progress_callback: 进度回调
+            debug: 是否打印完整 API 响应
+            debug_request: 是否打印发送的请求体
+            enable_grounding: 是否启用 Google Search Grounding
+            enable_image_search: 是否同时启用 Google Image Search
         
         Returns:
             生成的图像列表
@@ -791,7 +884,10 @@ class GeminiAPIClient(BaseAPIClient):
             images_per_prompt=images_per_prompt,
             images=images,
             progress_callback=progress_callback,
-            debug=debug
+            debug=debug,
+            debug_request=debug_request,
+            enable_grounding=enable_grounding,
+            enable_image_search=enable_image_search
         )
         
         return self.run_async_in_thread(coro)
