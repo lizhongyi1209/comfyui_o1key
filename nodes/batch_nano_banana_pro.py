@@ -196,6 +196,12 @@ class BatchNanoBananaPro:
                     "step": 0.1,
                     "display": "number"
                 }),
+                "谷歌搜索（联网）": ("BOOLEAN", {
+                    "default": True
+                }),
+                "图片搜索（联网）": ("BOOLEAN", {
+                    "default": False
+                }),
                 "seed": ("INT", {
                     "default": 0,
                     "min": 0,
@@ -362,7 +368,9 @@ class BatchNanoBananaPro:
         aspect_ratio: str,
         images: List[ImageInfo],
         output_folder: str,
-        task_index: int
+        task_index: int,
+        enable_grounding: bool = True,
+        enable_image_search: bool = False
     ) -> dict:
         """
         执行单个生成任务
@@ -405,7 +413,9 @@ class BatchNanoBananaPro:
                     images=input_pil_images,
                     session=session,
                     debug=DEBUG_LOG_ENABLED,
-                    debug_request=REQUEST_LOG_ENABLED
+                    debug_request=REQUEST_LOG_ENABLED,
+                    enable_grounding=enable_grounding,
+                    enable_image_search=enable_image_search
                 )
                 if gen_result:
                     # 正确解包元组：第一个元素是图像列表，第二个是计时信息
@@ -454,7 +464,9 @@ class BatchNanoBananaPro:
         aspect_ratio: str,
         output_folder: str,
         pbar=None,
-        prompts_per_task: Optional[List[str]] = None
+        prompts_per_task: Optional[List[str]] = None,
+        enable_grounding: bool = True,
+        enable_image_search: bool = False
     ) -> List[dict]:
         """
         异步批量处理所有任务
@@ -521,7 +533,9 @@ class BatchNanoBananaPro:
                             aspect_ratio=aspect_ratio,
                             images=list(pair),
                             output_folder=output_folder,
-                            task_index=start_idx + i
+                            task_index=start_idx + i,
+                            enable_grounding=enable_grounding,
+                            enable_image_search=enable_image_search
                         )
                     )
                     tasks.append(task)
@@ -620,6 +634,10 @@ class BatchNanoBananaPro:
         """
         start_time = time.time()
         
+        # 从 kwargs 提取搜索参数（参数名含全角括号，无法直接声明为 Python 形参）
+        enable_grounding: bool = kwargs.pop("谷歌搜索（联网）", True)
+        enable_image_search: bool = kwargs.pop("图片搜索（联网）", False)
+        
         try:
             # 设置随机种子（用于本地随机操作）
             random.seed(seed)
@@ -647,6 +665,15 @@ class BatchNanoBananaPro:
                 raise ValueError(
                     f"宽高比 \"{宽高比}\" 与模型 \"{模型}\" 不兼容！\n"
                     f"该模型支持的宽高比：{', '.join(supported_ratios)}"
+                )
+            
+            # 校验图片搜索（联网）与模型的兼容性
+            # 仅 nano-banana-2 和 gemini-3.1-flash-image-preview 支持图片搜索
+            IMAGE_SEARCH_UNSUPPORTED_MODELS = ["nano-banana-pro", "gemini-3-pro-image-preview"]
+            if enable_image_search and 模型 in IMAGE_SEARCH_UNSUPPORTED_MODELS:
+                raise ValueError(
+                    f"模型 \"{模型}\" 不支持【图片搜索（联网）】功能！"
+                    f"请切换到 nano-banana-2 或 gemini-3.1-flash-image-preview 后再使用"
                 )
             
             # 加载文件夹图片
@@ -704,10 +731,17 @@ class BatchNanoBananaPro:
             total_tasks = len(pairs)
             
             # 打印首行概览
+            # 图片搜索（联网）开启时隐含谷歌搜索接地，与客户端请求逻辑保持一致
+            grounding_str = ""
+            if enable_image_search:
+                grounding_str = " | 谷歌图片搜索接地"
+            elif enable_grounding:
+                grounding_str = " | 谷歌搜索接地"
+            
             if batch_prompts:
-                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 × {len(batch_prompts)}个提示词 | 共 {total_tasks} 任务")
+                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 × {len(batch_prompts)}个提示词 | 共 {total_tasks} 任务{grounding_str}")
             else:
-                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 | 共 {total_tasks} 任务")
+                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 | 共 {total_tasks} 任务{grounding_str}")
             
             # 创建 ComfyUI 原生进度条
             pbar = None
@@ -736,7 +770,9 @@ class BatchNanoBananaPro:
                             aspect_ratio=宽高比,
                             output_folder=保存路径,
                             pbar=pbar,
-                            prompts_per_task=prompts_per_task
+                            prompts_per_task=prompts_per_task,
+                            enable_grounding=enable_grounding,
+                            enable_image_search=enable_image_search
                         )
                     )
                 finally:
