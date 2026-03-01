@@ -17,6 +17,15 @@ from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..utils.image_utils import encode_image_to_base64
 
 
+def _translate_error_message(msg: str) -> str:
+    """将 API 返回的已知英文错误信息翻译为中文友好提示"""
+    if "people-in-user-uploads" in msg or (
+        "moderation" in msg and "inputs" in msg
+    ):
+        return "上传的参考图片中包含了真实人物【官方风控】，请尝试使用其他办法绕开。"
+    return msg
+
+
 class SoraClient(BaseAPIClient):
     """
     Sora 视频生成客户端
@@ -210,6 +219,7 @@ class SoraClient(BaseAPIClient):
                 if status == "failed":
                     error_info = data.get("error", {})
                     error_msg = error_info.get("message", "未知错误") if isinstance(error_info, dict) else str(error_info)
+                    error_msg = _translate_error_message(error_msg)
                     raise RuntimeError(f"视频生成失败: {error_msg}")
 
                 await asyncio.sleep(interval)
