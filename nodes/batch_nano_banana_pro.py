@@ -20,7 +20,7 @@ from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompt
 from ..utils.file_utils import (
     ImageInfo,
     load_images_from_folder,
-    pair_images_indexed,
+    pair_images_by_name,
     pair_images_cartesian,
     generate_output_filename,
     save_image
@@ -87,7 +87,7 @@ class BatchNanoBananaPro:
     RESOLUTIONS = ["512", "1K", "2K", "4K"]
     
     # 配对模式
-    PAIRING_MODES = ["1:1", "1*N", "不配对"]
+    PAIRING_MODES = ["按相同图片命名", "1*N", "不配对"]
     
     def __init__(self):
         """初始化节点"""
@@ -346,8 +346,8 @@ class BatchNanoBananaPro:
         # 文件夹图片配对
         if len(image_lists) == 1:
             base_pairs = [(img,) for img in image_lists[0]]
-        elif pairing_mode == "1:1":
-            base_pairs = list(pair_images_indexed(*image_lists))
+        elif pairing_mode == "按相同图片命名":
+            base_pairs = list(pair_images_by_name(*image_lists))
         else:  # 1*N
             base_pairs = list(pair_images_cartesian(*image_lists))
         

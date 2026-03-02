@@ -133,6 +133,77 @@ def pair_images_indexed(
     return list(zip(*non_empty_lists))
 
 
+def pair_images_by_name(
+    *image_lists: List[ImageInfo]
+) -> List[Tuple[ImageInfo, ...]]:
+    """
+    按文件名配对（同名匹配）
+
+    取所有文件夹中文件名（不含扩展名）的交集，按文件名字母升序排列后配对。
+    只有在所有文件夹中都存在同名文件，该文件名才会被纳入配对。
+    扩展名不同的文件（如 1.jpg 与 1.png）视为同名。
+
+    Args:
+        *image_lists: 多个 ImageInfo 列表
+
+    Returns:
+        配对后的元组列表，按文件名字母升序排列
+
+    Raises:
+        ValueError: 所有文件夹之间没有任何相同文件名时抛出
+
+    Example:
+        >>> list_a = [ImageInfo(filename="1", ...), ImageInfo(filename="2", ...)]
+        >>> list_b = [ImageInfo(filename="1", ...), ImageInfo(filename="3", ...)]
+        >>> pairs = pair_images_by_name(list_a, list_b)
+        >>> # [(list_a[0], list_b[0])]  # 只有 "1" 匹配
+    """
+    if not image_lists:
+        return []
+
+    non_empty_lists = [lst for lst in image_lists if lst]
+    if not non_empty_lists:
+        return []
+
+    # 单文件夹直接返回（无需配对）
+    if len(non_empty_lists) == 1:
+        return [(img,) for img in non_empty_lists[0]]
+
+    # 为每个文件夹建立 filename（stem）-> ImageInfo 的映射
+    name_maps = [
+        {img.filename: img for img in lst}
+        for lst in non_empty_lists
+    ]
+
+    # 取所有文件夹文件名的交集
+    common_names = set(name_maps[0].keys())
+    for nm in name_maps[1:]:
+        common_names &= set(nm.keys())
+
+    if not common_names:
+        # 收集各文件夹的文件名示例，帮助用户排查问题
+        folder_samples = []
+        for i, nm in enumerate(name_maps):
+            sample = sorted(nm.keys())[:3]
+            sample_str = "、".join(f'"{n}"' for n in sample)
+            folder_samples.append(f"文件夹{i + 1}：{sample_str}")
+        samples_info = "\n".join(folder_samples)
+        raise ValueError(
+            f"所有文件夹中没有找到任何同名图片，无法进行配对！\n"
+            f"请确保各文件夹内存在文件名相同的图片后重试。\n"
+            f"（文件名比较不含扩展名，例如「1.jpg」与「1.png」视为同名）\n\n"
+            f"各文件夹当前文件名示例：\n{samples_info}"
+        )
+
+    # 按文件名字母升序排列，保证顺序稳定
+    sorted_names = sorted(common_names, key=lambda x: x.lower())
+
+    return [
+        tuple(nm[name] for nm in name_maps)
+        for name in sorted_names
+    ]
+
+
 def pair_images_cartesian(
     *image_lists: List[ImageInfo]
 ) -> List[Tuple[ImageInfo, ...]]:
