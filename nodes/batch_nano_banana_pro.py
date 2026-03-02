@@ -223,6 +223,26 @@ class BatchNanoBananaPro:
                     "default": "",
                     "multiline": False
                 }),
+                "文件夹5": ("STRING", {
+                    "default": "",
+                    "multiline": False
+                }),
+                "文件夹6": ("STRING", {
+                    "default": "",
+                    "multiline": False
+                }),
+                "文件夹7": ("STRING", {
+                    "default": "",
+                    "multiline": False
+                }),
+                "文件夹8": ("STRING", {
+                    "default": "",
+                    "multiline": False
+                }),
+                "文件夹9": ("STRING", {
+                    "default": "",
+                    "multiline": False
+                }),
                 "保存路径": ("STRING", {
                     "default": "",
                     "multiline": False
@@ -248,20 +268,25 @@ class BatchNanoBananaPro:
         folder3: Optional[str],
         folder4: Optional[str],
         enable_scaling: bool,
-        target_megapixels: float
+        target_megapixels: float,
+        folder5: Optional[str] = None,
+        folder6: Optional[str] = None,
+        folder7: Optional[str] = None,
+        folder8: Optional[str] = None,
+        folder9: Optional[str] = None,
     ) -> List[List[ImageInfo]]:
         """
         加载所有文件夹中的图片
         
         Args:
-            folder1-4: 文件夹路径
+            folder1-9: 文件夹路径
             enable_scaling: 是否启用像素缩放
             target_megapixels: 目标像素数（百万像素）
         
         Returns:
             图片列表的列表
         """
-        folders = [folder1, folder2, folder3, folder4]
+        folders = [folder1, folder2, folder3, folder4, folder5, folder6, folder7, folder8, folder9]
         all_images = []
         
         for i, folder in enumerate(folders, 1):
@@ -603,6 +628,11 @@ class BatchNanoBananaPro:
         文件夹2: str,
         文件夹3: str,
         文件夹4: str,
+        文件夹5: str,
+        文件夹6: str,
+        文件夹7: str,
+        文件夹8: str,
+        文件夹9: str,
         像素缩放: bool,
         分辨率像素: float,
         seed: int,
@@ -618,7 +648,7 @@ class BatchNanoBananaPro:
         
         Args:
             prompt: 提示词
-            文件夹1-4: 图片文件夹路径
+            文件夹1-9: 图片文件夹路径
             像素缩放: 是否启用像素缩放
             分辨率像素: 目标像素数（百万像素）
             seed: 随机种子
@@ -646,7 +676,7 @@ class BatchNanoBananaPro:
             # 验证：至少需要填写一个文件夹路径
             has_any_folder = any(
                 f and f.strip()
-                for f in [文件夹1, 文件夹2, 文件夹3, 文件夹4]
+                for f in [文件夹1, 文件夹2, 文件夹3, 文件夹4, 文件夹5, 文件夹6, 文件夹7, 文件夹8, 文件夹9]
             )
             if not has_any_folder:
                 raise ValueError("请至少填写一个文件夹路径，该节点专为批量文件夹处理设计")
@@ -680,7 +710,8 @@ class BatchNanoBananaPro:
             print("BatchNanoBananaPro: 开始加载图片...")
             image_lists = self._load_folders(
                 文件夹1, 文件夹2, 文件夹3, 文件夹4,
-                像素缩放, 分辨率像素
+                像素缩放, 分辨率像素,
+                文件夹5, 文件夹6, 文件夹7, 文件夹8, 文件夹9
             )
             
             # 验证文件夹是否有可用图片
