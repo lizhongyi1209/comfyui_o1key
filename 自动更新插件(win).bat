@@ -63,7 +63,7 @@ if exist ".config.backup" (
 
 echo.
 echo [4/4] 更新依赖包...
-python -m pip install -r requirements.txt --upgrade --quiet
+python -m pip install -r requirements.txt --upgrade --quiet >nul 2>&1
 if %errorlevel% neq 0 (
     echo [警告] 依赖包更新失败，请手动运行: pip install -r requirements.txt
 ) else (
