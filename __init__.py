@@ -19,7 +19,42 @@ except Exception:
     # 静默失败，不影响插件加载
     pass
 
+import ssl
+
 from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, SoraVideo, VideoPreview
+
+# 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
+_MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
+_MSG_SSL_NETWORK = (
+    "本地网络不太稳定!解决方案如下:\n"
+    "1. 重启程序再试试看 (优先)\n"
+    "2. 调整一下网络环境,如wifi或宽带等\n"
+    "3. 切换VPN节点,或更换代理模式\n"
+    "4. 关掉杀毒软件或防火墙\n"
+    "5. 关掉浏览器VPN插件,避免冲突"
+)
+
+def _wrap_generate_for_error_display(cls, attr="generate"):
+    original = getattr(cls, attr, None)
+    if original is None:
+        return
+    def wrapped(self, *args, **kwargs):
+        try:
+            return original(self, *args, **kwargs)
+        except TimeoutError as e:
+            msg = (str(e) or "").strip()
+            if not msg:
+                msg = _MSG_TIMEOUT
+            raise TimeoutError(msg) from None
+        except (ssl.SSLError, OSError) as e:
+            err_str = str(e)
+            if "DECRYPTION_FAILED_OR_BAD_RECORD_MAC" in err_str or "decryption failed or bad record mac" in err_str.lower():
+                raise RuntimeError(_MSG_SSL_NETWORK) from None
+            raise
+    setattr(cls, attr, wrapped)
+
+_wrap_generate_for_error_display(NanoBananaPro)
+_wrap_generate_for_error_display(BatchNanoBananaPro)
 
 # ComfyUI 节点注册
 NODE_CLASS_MAPPINGS = {

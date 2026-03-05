@@ -70,6 +70,25 @@ class GeminiFlashClient(BaseAPIClient):
         
         return endpoint
     
+    def get_http_error_message(self, status_code: int, error_message: str) -> Optional[str]:
+        """Gemini 请求 429/503 时返回图中约定的多行错误框文案。"""
+        if status_code == 429:
+            return (
+                "莫慌!该模型暂时超出速率限制啦\n"
+                "解决方案如下(任意一种):\n"
+                "1.切换当前模型\n"
+                "2.前往后台,修改令牌分组"
+            )
+        if status_code == 503:
+            return (
+                "警报!谷歌服务器当前过载!\n"
+                "解决方案如下:\n"
+                "1.摸会儿鱼吧,我也没办法,谷歌会尽快恢复,嘿嘿~\n"
+                "2.切换其他模型\n"
+                "3.前往后台,修改令牌分组"
+            )
+        return None
+    
     def build_request_body(
         self,
         prompt: str = "",

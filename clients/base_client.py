@@ -118,6 +118,20 @@ class BaseAPIClient(ABC):
                 "请求体积超过20MB限制，请调整分辨率或减少图片数量"
             )
     
+    def get_http_error_message(self, status_code: int, error_message: str) -> Optional[str]:
+        """
+        子类可重写：为指定 HTTP 状态码返回自定义错误文案。
+        若返回 None，则使用基类默认拼接文案。
+        
+        Args:
+            status_code: HTTP 状态码（如 429、503）
+            error_message: API 返回的原始错误信息
+        
+        Returns:
+            自定义完整错误文案，或 None 表示使用默认
+        """
+        return None
+    
     async def request_async(
         self,
         endpoint: str,
@@ -215,6 +229,9 @@ class BaseAPIClient(ABC):
                             f"  - 使用其他可用模型"
                         )
                     elif response.status == 429:
+                        custom = self.get_http_error_message(429, error_message)
+                        if custom is not None:
+                            raise RuntimeError(custom)
                         raise RuntimeError(
                             f"请求频率超限 (429 Too Many Requests)\n"
                             f"API 返回错误：{error_message}\n"
@@ -223,6 +240,9 @@ class BaseAPIClient(ABC):
                             f"  - 检查 API 配额是否充足"
                         )
                     elif response.status == 503:
+                        custom = self.get_http_error_message(503, error_message)
+                        if custom is not None:
+                            raise RuntimeError(custom)
                         raise RuntimeError(
                             f"服务暂时不可用 (503 Service Unavailable)\n"
                             f"API 返回错误：{error_message}\n"
@@ -333,12 +353,18 @@ class BaseAPIClient(ABC):
                             f"建议：检查 API 密钥"
                         )
                     elif response.status == 429:
+                        custom = self.get_http_error_message(429, error_message)
+                        if custom is not None:
+                            raise RuntimeError(custom)
                         raise RuntimeError(
                             f"请求频率超限 (429 Too Many Requests)\n"
                             f"API 返回错误：{error_message}\n"
                             f"建议：等待一段时间后重试"
                         )
                     elif response.status == 503:
+                        custom = self.get_http_error_message(503, error_message)
+                        if custom is not None:
+                            raise RuntimeError(custom)
                         raise RuntimeError(
                             f"服务暂时不可用 (503 Service Unavailable)\n"
                             f"API 返回错误：{error_message}\n"

@@ -893,10 +893,10 @@ class BatchNanoBananaPro:
                 raise ValueError(error_msg) from None
         
         except RuntimeError as e:
-            # 运行时错误 - 只显示简洁信息
-            error_msg = str(e).split('\n')[0]  # 只取第一行
-            print(f"BatchNanoBananaPro: ❌ {error_msg}")
-            raise RuntimeError(error_msg) from None
+            # 日志只打第一行；报错框展示完整多行
+            error_full = str(e)
+            print(f"BatchNanoBananaPro: ❌ {error_full.split('\n')[0]}")
+            raise RuntimeError(error_full) from None
         
         except Exception as e:
             # 其他未知错误 - 只显示简洁信息

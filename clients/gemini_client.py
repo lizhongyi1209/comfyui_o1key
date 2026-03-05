@@ -80,6 +80,25 @@ class GeminiAPIClient(BaseAPIClient):
         # 兜底：使用标准模式端点
         return "/v1beta/models/gemini-3-pro-image-preview:generateContent"
     
+    def get_http_error_message(self, status_code: int, error_message: str) -> Optional[str]:
+        """Gemini 请求 429/503 时返回图中约定的多行错误框文案。"""
+        if status_code == 429:
+            return (
+                "莫慌!该模型暂时超出速率限制啦\n"
+                "解决方案如下(任意一种):\n"
+                "1.切换当前模型\n"
+                "2.前往后台,修改令牌分组"
+            )
+        if status_code == 503:
+            return (
+                "警报!谷歌服务器当前过载!\n"
+                "解决方案如下:\n"
+                "1.摸会儿鱼吧,我也没办法,谷歌会尽快恢复,嘿嘿~\n"
+                "2.切换其他模型\n"
+                "3.前往后台,修改令牌分组"
+            )
+        return None
+    
     def build_request_body(
         self,
         prompt: str = "",
@@ -216,14 +235,8 @@ class GeminiAPIClient(BaseAPIClient):
         
         if candidates_token_count == 0:
             error_msg = (
-                "内容审核拒绝 - candidatesTokenCount = 0\n\n"
-                "原因：提示词或参考图包含不适当内容（色情、暴力、敏感话题等），"
-                "在内容审核阶段就被拒绝，连候选内容都未生成。\n\n"
-                "建议：\n"
-                "  - 检查提示词，确保不包含敏感或违规内容\n"
-                "  - 如使用参考图，确保图片内容健康合规\n"
-                "  - 避免描述暴力、色情等不当内容\n"
-                "  - 调整提示词后重试"
+                "Damn!你触发顶级风控啦!还没到生图阶段就被拒了。\n"
+                "赶紧调整一下图片或提示词吧!该情况不会返回图片且正常扣费!下次小心哦~"
             )
             raise RuntimeError(error_msg)
         
@@ -234,65 +247,15 @@ class GeminiAPIClient(BaseAPIClient):
                 finish_reason = candidate.get("finishReason", "")
                 
                 if finish_reason and finish_reason != "STOP":
-                    # 根据不同的 finishReason 提供具体建议
-                    reason_messages = {
-                        "PROHIBITED_CONTENT": (
-                            "违禁内容拒绝",
-                            "生成内容触发了违禁内容策略",
-                            [
-                                "避免引用未来未发布的产品或概念（知识库截止2025年1月）",
-                                "使用专业图片编辑软件处理特殊需求",
-                                "确保请求内容在模型知识范围内"
-                            ]
-                        ),
-                        "SAFETY": (
-                            "安全过滤器拒绝",
-                            "内容触发了安全过滤器",
-                            [
-                                "使用健康、正面的描述",
-                                "避免涉及隐私和伦理问题的内容",
-                                "调整提示词后重试"
-                            ]
-                        ),
-                        "RECITATION": (
-                            "版权问题",
-                            "可能涉及版权或重复已有内容",
-                            [
-                                "避免涉及版权敏感话题",
-                                "使用更原创的描述方式",
-                                "调整提示词后重试"
-                            ]
-                        ),
-                        "MAX_TOKENS": (
-                            "Token 超限",
-                            "生成的内容超过了 Token 限制",
-                            [
-                                "简化提示词",
-                                "减少输入图片数量",
-                                "降低请求复杂度"
-                            ]
-                        )
-                    }
-                    
-                    if finish_reason in reason_messages:
-                        title, reason, suggestions = reason_messages[finish_reason]
-                        suggestions_text = "\n".join([f"  - {s}" for s in suggestions])
-                        error_msg = (
-                            f"{title} - finishReason = {finish_reason}\n\n"
-                            f"原因：{reason}\n\n"
-                            f"建议：\n{suggestions_text}"
-                        )
-                    else:
-                        # 未知的 finishReason
-                        error_msg = (
-                            f"生成异常 - finishReason = {finish_reason}\n\n"
-                            "原因：生成过程中断，具体原因未知\n\n"
-                            "建议：\n"
-                            "  - 使用健康、正面的描述\n"
-                            "  - 避免敏感话题\n"
-                            "  - 调整提示词后重试"
-                        )
-                    
+                    error_msg = (
+                        "Ohh no! 生图过程触发风控,图片被拒绝生成!\n"
+                        "可能原因如下:\n"
+                        "1.违禁内容\n"
+                        "2.触发安全过滤器\n"
+                        "3.涉及版权问题\n"
+                        "4. Token超限\n"
+                        "赶紧调整一下图片或提示词吧!该情况不会返回图片且正常扣费!下次小心哦~"
+                    )
                     raise RuntimeError(error_msg)
         
         # ========== 图像提取 ==========
