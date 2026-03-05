@@ -13,6 +13,9 @@ if not exist ".git" (
     exit /b 1
 )
 
+:: 确保使用国内镜像（Gitee）拉取，避免 GitHub 网络问题
+git remote get-url gitee >nul 2>&1 || git remote add gitee https://gitee.com/resonLzy/comfyui_o1key.git
+
 :: 保存当前版本
 if exist "version.txt" (
     set /p OLD_VERSION=<version.txt
@@ -23,12 +26,12 @@ if exist "version.txt" (
 )
 
 echo.
-echo [1/4] 检查远程更新...
-git fetch origin
+echo [1/4] 检查远程更新（国内镜像 Gitee）...
+git fetch gitee
 
-:: 检查是否有更新
-git status -uno | findstr "Your branch is behind" > nul
-if %errorlevel% equ 0 (
+:: 检查是否有更新（与 gitee/main 比较）
+for /f %%i in ('git rev-list HEAD..gitee/main --count 2^>nul') do set BEHIND=%%i
+if defined BEHIND if %BEHIND% GTR 0 (
     echo 发现新版本！
 ) else (
     echo 已是最新版本
@@ -45,8 +48,8 @@ if exist ".config" (
 )
 
 echo.
-echo [3/4] 拉取最新代码...
-git pull origin main --quiet
+echo [3/4] 拉取最新代码（Gitee 镜像）...
+git pull gitee main --quiet
 if %errorlevel% neq 0 (
     echo [错误] 代码更新失败，请检查网络连接或手动解决冲突
     pause

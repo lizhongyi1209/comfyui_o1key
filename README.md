@@ -32,6 +32,19 @@ pip install -r requirements.txt
 
 然后重启 ComfyUI。
 
+### 国内用户安装（GitHub 拉取慢或失败时）
+
+使用 Gitee 镜像安装与更新，避免网络问题：
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://gitee.com/resonLzy/comfyui_o1key.git
+cd comfyui_o1key
+pip install -r requirements.txt
+```
+
+自动更新脚本（见下方「更新插件」）已改为从 Gitee 拉取，国内用户可直接使用。
+
 ---
 
 ## ⚙️ 配置
@@ -119,23 +132,34 @@ O1KEY_API_KEY=你的API密钥
 
 ## 🔄 更新插件
 
+自动更新脚本**已改为从国内镜像（Gitee）拉取**，国内用户无需科学上网即可更新。
+
 ### 方法一：自动更新（推荐）⭐
 
 **Windows 用户：**
 1. 进入插件目录：`ComfyUI\custom_nodes\comfyui_o1key`
-2. 双击运行 `update.bat`
+2. 双击运行 `自动更新插件(win).bat`
 3. 等待更新完成
 4. 重启 ComfyUI
 
 **Linux/Mac 用户：**
 ```bash
 cd ComfyUI/custom_nodes/comfyui_o1key
-chmod +x update.sh  # 首次运行需要添加执行权限
-./update.sh
+chmod +x "自动更新插件(mac).sh"   # 首次运行需要添加执行权限
+./"自动更新插件(mac).sh"
 ```
 
 ### 方法二：手动更新
 
+从 Gitee 镜像拉取（国内推荐）：
+```bash
+cd ComfyUI/custom_nodes/comfyui_o1key
+git remote get-url gitee &>/dev/null || git remote add gitee https://gitee.com/resonLzy/comfyui_o1key.git
+git pull gitee main
+pip install -r requirements.txt --upgrade
+```
+
+从 GitHub 拉取：
 ```bash
 cd ComfyUI/custom_nodes/comfyui_o1key
 git pull origin main
@@ -194,6 +218,21 @@ Google Gemini 模型节点，支持更多模型选择。
 ---
 
 ## ⚠️ 开发者注意事项
+
+### 维护者：发布流程与镜像同步
+
+代码**先提交并推送到 GitHub**，再**同步到 Gitee 镜像**，国内用户通过 Gitee 拉取以解决网络问题。
+
+**首次配置**（仅需一次）：
+```bash
+git remote add gitee https://gitee.com/resonLzy/comfyui_o1key.git
+```
+
+**每次发布**：
+```bash
+git push origin main    # 先更新 GitHub
+git push gitee main     # 再同步到 Gitee 镜像
+```
 
 ### 文件编码要求
 

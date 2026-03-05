@@ -21,6 +21,9 @@ if [ ! -d ".git" ]; then
     exit 1
 fi
 
+# 确保使用国内镜像（Gitee）拉取，避免 GitHub 网络问题
+git remote get-url gitee &>/dev/null || git remote add gitee https://gitee.com/resonLzy/comfyui_o1key.git
+
 # 保存当前版本
 if [ -f "version.txt" ]; then
     OLD_VERSION=$(cat version.txt)
@@ -31,14 +34,13 @@ else
 fi
 
 echo ""
-echo "[1/4] 检查远程更新..."
-git fetch origin
+echo "[1/4] 检查远程更新（国内镜像 Gitee）..."
+git fetch gitee
 
-# 检查是否有更新
+# 检查是否有更新（与 gitee/main 比较）
 LOCAL=$(git rev-parse @)
-REMOTE=$(git rev-parse @{u})
-
-if [ $LOCAL != $REMOTE ]; then
+REMOTE=$(git rev-parse gitee/main 2>/dev/null || echo "")
+if [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
     echo -e "${GREEN}发现新版本！${NC}"
 else
     echo -e "${GREEN}已是最新版本${NC}"
@@ -57,8 +59,8 @@ if [ -f ".config" ]; then
 fi
 
 echo ""
-echo "[3/4] 拉取最新代码..."
-if git pull origin main --quiet; then
+echo "[3/4] 拉取最新代码（Gitee 镜像）..."
+if git pull gitee main --quiet; then
     echo -e "${GREEN}代码更新成功${NC}"
 else
     echo -e "${RED}[错误] 代码更新失败，请检查网络连接或手动解决冲突${NC}"
