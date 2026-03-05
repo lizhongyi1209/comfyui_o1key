@@ -196,11 +196,11 @@ class BatchNanoBananaPro:
                     "step": 0.1,
                     "display": "number"
                 }),
-                "谷歌搜索（联网）": ("BOOLEAN", {
-                    "default": True
+                "谷歌搜索（联网）": (["关闭", "打开"], {
+                    "default": "关闭"
                 }),
-                "图片搜索（联网）": ("BOOLEAN", {
-                    "default": False
+                "图片搜索（联网）": (["关闭", "打开"], {
+                    "default": "关闭"
                 }),
                 "seed": ("INT", {
                     "default": 0,
@@ -664,9 +664,9 @@ class BatchNanoBananaPro:
         """
         start_time = time.time()
         
-        # 从 kwargs 提取搜索参数（参数名含全角括号，无法直接声明为 Python 形参）
-        enable_grounding: bool = kwargs.pop("谷歌搜索（联网）", True)
-        enable_image_search: bool = kwargs.pop("图片搜索（联网）", False)
+        # 从 kwargs 提取搜索参数（界面显示为「关闭/打开」，转为 bool 供调用）
+        enable_grounding: bool = (kwargs.pop("谷歌搜索（联网）", "关闭") == "打开")
+        enable_image_search: bool = (kwargs.pop("图片搜索（联网）", "关闭") == "打开")
         
         try:
             # 设置随机种子（用于本地随机操作）

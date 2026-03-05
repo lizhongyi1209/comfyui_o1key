@@ -20,6 +20,9 @@
   - 新增 `.config.example` 作为配置文件示例
 
 ### Changed
+- **502 错误提示优化** (`clients/base_client.py`)
+  - 当 API 返回 502 时，弹框显示友好文案：「糟糕！请求到上游时遇到超时或过载！别担心，过会儿再次点击运行即可！」
+  - 在 `request_async` 与 `request_get_async` 中均增加 502 专用分支
 - **配置管理策略**
   - `.config` 文件现在完全忽略提交（添加到 `.gitignore`）
   - 简化配置流程，用户通过快捷脚本自动创建本地配置

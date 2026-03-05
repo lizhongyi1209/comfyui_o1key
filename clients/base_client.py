@@ -259,6 +259,10 @@ class BaseAPIClient(ABC):
                             f"  - 稍后重试\n"
                             f"  - 降低分辨率或减少输入图像数量"
                         )
+                    elif response.status == 502:
+                        raise RuntimeError(
+                            "糟糕！请求到上游时遇到超时或过载！别担心，过会儿再次点击运行即可！"
+                        )
                     else:
                         raise RuntimeError(
                             f"API 请求失败 (状态码: {response.status})\n"
@@ -375,6 +379,10 @@ class BaseAPIClient(ABC):
                             f"API 请求超时 (504 Gateway Timeout)\n"
                             f"API 返回错误：{error_message}\n"
                             f"建议：稍后重试"
+                        )
+                    elif response.status == 502:
+                        raise RuntimeError(
+                            "糟糕！请求到上游时遇到超时或过载！别担心，过会儿再次点击运行即可！"
                         )
                     else:
                         raise RuntimeError(
