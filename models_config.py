@@ -546,6 +546,50 @@ def get_sora_sizes_with_labels(model_id: str) -> List[Tuple[str, str]]:
 
 
 # ============================================================
+# Google Veo 视频生成模型
+# ============================================================
+
+VEO_MODELS = [
+    {
+        "id": "Veo3.1",
+        "description": "Google Veo 3.1 视频生成模型，支持文生视频和图生视频",
+        "enabled": True,
+    },
+]
+
+# Veo 分辨率映射表
+# key: "分辨率_宽高比", value: 实际分辨率字符串
+VEO_RESOLUTION_MAP = {
+    # 720p
+    "720p_9:16": "720x1280",
+    "720p_16:9": "1280x720",
+    # 1080p
+    "1080p_9:16": "1080x1920",
+    "1080p_16:9": "1920x1080",
+    # 4K
+    "4K_9:16": "2160x3840",
+    "4K_16:9": "3840x2160",
+}
+
+
+# ============================================================
+# Veo 模型工具函数
+# ============================================================
+
+def get_enabled_veo_models() -> List[str]:
+    """获取所有启用的 Veo 模型 ID 列表"""
+    return [model["id"] for model in VEO_MODELS if model.get("enabled", False)]
+
+
+def get_veo_model_config(model_id: str) -> Optional[Dict]:
+    """根据模型 ID 获取 Veo 模型的完整配置"""
+    for model in VEO_MODELS:
+        if model["id"] == model_id:
+            return model
+    return None
+
+
+# ============================================================
 # Gemini Flash 模型工具函数
 # ============================================================
 

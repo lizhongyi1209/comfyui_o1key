@@ -21,7 +21,7 @@ except Exception:
 
 import ssl
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, SoraVideo, VideoPreview, KlingVideo
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, SoraVideo, VideoPreview, KlingVideo, GoogleVeo
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -68,6 +68,7 @@ NODE_CLASS_MAPPINGS = {
     "SoraVideo": SoraVideo,
     "VideoPreview": VideoPreview,
     "KlingVideo": KlingVideo,
+    "GoogleVeo": GoogleVeo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -81,6 +82,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SoraVideo": "Sora 视频生成",
     "VideoPreview": "视频预览",
     "KlingVideo": "可灵 Kling 视频生成",
+    "GoogleVeo": "Google Veo - ab",
 }
 
 WEB_DIRECTORY = "./web"

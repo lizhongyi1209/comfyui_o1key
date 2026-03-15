@@ -12,5 +12,6 @@ from .remove_metadata import SaveCleanImage, BatchCleanMetadata
 from .sora_video import SoraVideo
 from .video_preview import VideoPreview
 from .kling_video import KlingVideo
+from .veo_video import GoogleVeo
 
-__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'SoraVideo', 'VideoPreview', 'KlingVideo']
+__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'SoraVideo', 'VideoPreview', 'KlingVideo', 'GoogleVeo']

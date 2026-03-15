@@ -8,5 +8,6 @@ from .gemini_client import GeminiAPIClient
 from .gemini_flash_client import GeminiFlashClient
 from .sora_client import SoraClient
 from .kling_client import KlingClient
+from .veo_client import VeoClient
 
-__all__ = ['BaseAPIClient', 'GeminiAPIClient', 'GeminiFlashClient', 'SoraClient', 'KlingClient']
+__all__ = ['BaseAPIClient', 'GeminiAPIClient', 'GeminiFlashClient', 'SoraClient', 'KlingClient', 'VeoClient']
