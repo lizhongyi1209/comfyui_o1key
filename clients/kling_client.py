@@ -1,0 +1,174 @@
+"""
+Kling 视频生成 API 客户端
+"""
+
+import asyncio
+import json
+import os
+from typing import Any, Callable, Dict, Optional
+
+import aiohttp
+
+from ..utils.config import get_api_key_or_raise, get_api_base_url
+
+
+class KlingClient:
+    """Kling 视频生成客户端"""
+
+    ENDPOINTS = {
+        "image2video":    "/kling/v1/videos/image2video",
+        "text2video":     "/kling/v1/videos/text2video",
+        "motion_control": "/kling/v1/videos/motion-control",
+    }
+
+    POLL_INITIAL_INTERVAL = 3
+    POLL_MAX_INTERVAL = 15
+
+    def __init__(self):
+        self.api_key = get_api_key_or_raise()
+        self.base_url = get_api_base_url()
+
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    # ── 提交任务 ──────────────────────────────────────────────────────
+
+    async def create_video_async(
+        self,
+        endpoint_type: str,
+        body: Dict[str, Any],
+        session: aiohttp.ClientSession,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}{self.ENDPOINTS[endpoint_type]}"
+
+        async with session.post(url, json=body, headers=self._headers()) as resp:
+            text = await resp.text()
+            if resp.status != 200:
+                raise RuntimeError(f"提交失败 ({resp.status}): {text}")
+            return json.loads(text)
+
+    # ── 轮询状态 ──────────────────────────────────────────────────────
+
+    async def poll_status_async(
+        self,
+        task_id: str,
+        endpoint_type: str,
+        session: aiohttp.ClientSession,
+        on_progress: Optional[Callable[[int], None]] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}{self.ENDPOINTS[endpoint_type]}/{task_id}"
+        interval = self.POLL_INITIAL_INTERVAL
+
+        while True:
+            async with session.get(url, headers=self._headers()) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    raise RuntimeError(f"状态查询失败 ({resp.status}): {text}")
+                result = json.loads(text)
+
+            data = result.get("data", {})
+            inner_data = data.get("data", {}) if isinstance(data, dict) else {}
+            status = (
+                data.get("status") or
+                inner_data.get("task_status") or
+                result.get("status") or
+                ""
+            )
+            status = status.lower() if status else ""
+
+            progress_str = data.get("progress", "0%")
+            try:
+                progress_pct = int(str(progress_str).replace("%", "").strip())
+            except (ValueError, AttributeError):
+                progress_pct = 0
+
+            print(f"[视频生成] 生成中 {progress_pct}%")
+
+            if on_progress:
+                on_progress(progress_pct)
+
+            if status in ("success", "completed", "done", "finished", "succeed"):
+                return result
+            elif status in ("failed", "fail"):
+                error_info = result.get("error", {})
+                if isinstance(error_info, dict):
+                    error_msg = error_info.get("message", "未知错误")
+                else:
+                    error_msg = str(error_info)
+                raise RuntimeError(f"生成失败：{error_msg}")
+
+            await asyncio.sleep(interval)
+            interval = min(interval * 1.5, self.POLL_MAX_INTERVAL)
+
+    # ── 下载视频 ──────────────────────────────────────────────────────
+
+    async def download_video_async(
+        self,
+        video_url: str,
+        save_path: str,
+        session: aiohttp.ClientSession,
+    ) -> str:
+        print("[视频生成] 下载视频...")
+        async with session.get(video_url, allow_redirects=True) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"视频下载失败 ({resp.status})")
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, "wb") as f:
+                async for chunk in resp.content.iter_chunked(8192):
+                    f.write(chunk)
+        return save_path
+
+    # ── 异步入口（供节点调用）────────────────────────────────────────
+
+    async def generate_async(
+        self,
+        endpoint_type: str,
+        body: Dict[str, Any],
+        save_path: str,
+        on_stage: Optional[Callable[[str], None]] = None,
+        on_progress: Optional[Callable[[int], None]] = None,
+    ) -> str:
+        """提交 → 轮询 → 下载，返回本地文件路径"""
+        connector = aiohttp.TCPConnector(force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            if on_stage:
+                on_stage("submitting")
+
+            result = await self.create_video_async(endpoint_type, body, session)
+            # 提交响应结构：result.data.task_id
+            task_id = result.get("task_id") or result.get("data", {}).get("task_id")
+            if not task_id:
+                raise RuntimeError(f"API 未返回任务 ID，响应：{result}")
+            if on_stage:
+                on_stage(f"submitted:{task_id}")
+
+            if on_stage:
+                on_stage("polling")
+            final = await self.poll_status_async(
+                task_id, endpoint_type, session, on_progress=on_progress
+            )
+
+            # 兼容多种URL路径
+            # 响应结构：result.data.result_url 或 result.data.data.task_result.videos[0].url
+            data = final.get("data", {})
+            inner_data = data.get("data", {}) if isinstance(data, dict) else {}
+            video_url = (
+                data.get("result_url") or
+                final.get("url") or
+                final.get("video_url") or
+                (inner_data.get("task_result", {}).get("videos", [{}])[0].get("url")
+                 if inner_data.get("task_result", {}).get("videos") else None)
+            )
+            if not video_url:
+                raise RuntimeError(f"API 未返回视频 URL，响应：{final}")
+
+            if on_stage:
+                on_stage("downloading")
+            path = await self.download_video_async(video_url, save_path, session)
+
+            if on_stage:
+                on_stage("done")
+            return path
