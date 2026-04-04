@@ -21,6 +21,11 @@ class KlingClient:
         "motion_control": "/kling/v1/videos/motion-control",
     }
 
+    # new API 三段式端点（动作控制走这里）
+    NEW_API_CREATE   = "/v1/videos"
+    NEW_API_STATUS   = "/v1/videos/{video_id}"
+    NEW_API_CONTENT  = "/v1/videos/{video_id}/content"
+
     POLL_INITIAL_INTERVAL = 3
     POLL_MAX_INTERVAL = 15
 
@@ -172,3 +177,114 @@ class KlingClient:
             if on_stage:
                 on_stage("done")
             return path
+
+    # ── 动作控制：走 new API 三段式流程 ──────────────────────────────
+
+    async def motion_control_async(
+        self,
+        body: Dict[str, Any],
+        save_path: str,
+        on_stage: Optional[Callable[[str], None]] = None,
+        on_progress: Optional[Callable[[int], None]] = None,
+    ) -> str:
+        """
+        动作控制专用入口：
+          POST /v1/videos  →  GET /v1/videos/{id}  →  GET /v1/videos/{id}/content
+        body 字段与 Kling 官方动作控制接口一致（image_url/video_url/prompt/...）。
+        """
+        headers = {"Authorization": f"Bearer {self.api_key}",
+                   "Content-Type": "application/json"}
+        interval = self.POLL_INITIAL_INTERVAL
+
+        connector = aiohttp.TCPConnector(force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
+
+            # 1. 提交
+            if on_stage:
+                on_stage("submitting")
+            create_url = f"{self.base_url}{self.NEW_API_CREATE}"
+            async with session.post(create_url, json=body, headers=headers) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    # 尝试提取友好错误信息
+                    try:
+                        err = json.loads(text)
+                        msg = err.get("error", {}).get("message") or err.get("message") or text
+                    except Exception:
+                        msg = text
+                    raise RuntimeError(f"动作控制提交失败 ({resp.status}): {msg}")
+                create_resp = json.loads(text)
+
+            video_id = create_resp.get("id")
+            if not video_id:
+                raise RuntimeError(f"API 未返回视频 ID，响应：{create_resp}")
+            if on_stage:
+                on_stage(f"submitted:{video_id}")
+
+            # 2. 轮询
+            status_url = f"{self.base_url}{self.NEW_API_STATUS.format(video_id=video_id)}"
+            while True:
+                async with session.get(status_url, headers=headers) as resp:
+                    text = await resp.text()
+                    if resp.status != 200:
+                        try:
+                            err = json.loads(text)
+                            msg = err.get("error", {}).get("message") or err.get("message") or text
+                        except Exception:
+                            msg = text
+                        raise RuntimeError(f"状态查询失败 ({resp.status}): {msg}")
+                    status_resp = json.loads(text)
+
+                status = status_resp.get("status", "").lower()
+                progress_raw = status_resp.get("progress", 0)
+                try:
+                    progress_pct = int(str(progress_raw).rstrip("%").strip())
+                except (ValueError, AttributeError):
+                    progress_pct = 0
+
+                print(f"[动作控制] 生成中 {progress_pct}%")
+                if on_progress:
+                    on_progress(progress_pct)
+
+                if status == "completed":
+                    break
+                if status == "failed":
+                    error_info = status_resp.get("error", {})
+                    error_msg = (error_info.get("message", "未知错误")
+                                 if isinstance(error_info, dict) else str(error_info))
+                    raise RuntimeError(f"动作控制生成失败：{error_msg}")
+
+                await asyncio.sleep(interval)
+                interval = min(interval * 1.5, self.POLL_MAX_INTERVAL)
+
+            # 3. 下载
+            if on_stage:
+                on_stage("downloading")
+            content_url = f"{self.base_url}{self.NEW_API_CONTENT.format(video_id=video_id)}"
+            async with session.get(content_url, headers=headers,
+                                   allow_redirects=True) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"视频下载失败 ({resp.status})")
+                content_type = resp.headers.get("Content-Type", "")
+                if "application/json" in content_type:
+                    data = await resp.json()
+                    download_url = data.get("url") or data.get("download_url")
+                    if not download_url:
+                        raise RuntimeError("视频下载失败：响应中未找到下载链接")
+                    async with session.get(download_url) as dl_resp:
+                        if dl_resp.status != 200:
+                            raise RuntimeError(f"从下载链接获取视频失败 ({dl_resp.status})")
+                        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                        with open(save_path, "wb") as f:
+                            async for chunk in dl_resp.content.iter_chunked(8192):
+                                f.write(chunk)
+                else:
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    with open(save_path, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(8192):
+                            f.write(chunk)
+
+            if on_stage:
+                on_stage("done")
+            return save_path
+

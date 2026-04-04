@@ -142,7 +142,7 @@ def _validate_image(tensor, label: str = "图片") -> None:
 
 
 class KlingVideo:
-    """Kling 3.0 视频生成节点（支持多镜头）"""
+    """Kling 视频生成节点（支持多镜头）"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -150,6 +150,7 @@ class KlingVideo:
             "required": {
                 "提示词": ("STRING", {"multiline": True, "default": ""}),
                 "反向提示词": ("STRING", {"multiline": True, "default": ""}),
+                "模型版本": (["v3", "v2-6"], {"default": "v3"}),
                 "时长": ([5, 10, 15],),
                 "分辨率": (["1080p", "720p"],),
                 "宽高比": (["智能", "16:9", "9:16", "1:1"], {"default": "智能"}),
@@ -159,17 +160,17 @@ class KlingVideo:
             "optional": {
                 "起始帧": ("IMAGE",),
                 "镜头1_提示词": ("STRING", {"multiline": True, "default": ""}),
-                "镜头1_时长": ("INT", {"default": 5, "min": 1, "max": 15, "step": 1}),
+                "镜头1_时长": ("STRING", {"default": "5"}),
                 "镜头2_提示词": ("STRING", {"multiline": True, "default": ""}),
-                "镜头2_时长": ("INT", {"default": 5, "min": 1, "max": 15, "step": 1}),
+                "镜头2_时长": ("STRING", {"default": "5"}),
                 "镜头3_提示词": ("STRING", {"multiline": True, "default": ""}),
-                "镜头3_时长": ("INT", {"default": 5, "min": 1, "max": 15, "step": 1}),
+                "镜头3_时长": ("STRING", {"default": "5"}),
                 "镜头4_提示词": ("STRING", {"multiline": True, "default": ""}),
-                "镜头4_时长": ("INT", {"default": 5, "min": 1, "max": 15, "step": 1}),
+                "镜头4_时长": ("STRING", {"default": "5"}),
                 "镜头5_提示词": ("STRING", {"multiline": True, "default": ""}),
-                "镜头5_时长": ("INT", {"default": 5, "min": 1, "max": 15, "step": 1}),
+                "镜头5_时长": ("STRING", {"default": "5"}),
                 "镜头6_提示词": ("STRING", {"multiline": True, "default": ""}),
-                "镜头6_时长": ("INT", {"default": 5, "min": 1, "max": 15, "step": 1}),
+                "镜头6_时长": ("STRING", {"default": "5"}),
             }
         }
 
@@ -182,6 +183,7 @@ class KlingVideo:
         """生成视频（支持多镜头）"""
         prompt          = kwargs["提示词"]
         negative_prompt = kwargs["反向提示词"]
+        model_ver       = kwargs.get("模型版本", "v3")
         duration        = kwargs["时长"]
         resolution      = kwargs["分辨率"]
         aspect_ratio    = kwargs["宽高比"]
@@ -192,12 +194,27 @@ class KlingVideo:
         mode  = "pro" if resolution == "1080p" else "std"
         voice = "voice" if generate_audio == "打开" else "novoice"
 
+        # ── v2-6 模型约束校验 ──────────────────────────────────────────
+        if model_ver == "v2-6":
+            if duration == 15:
+                raise ValueError(
+                    "v2-6 模型不支持 15s 时长，请选择 5s 或 10s。"
+                )
+            if mode == "std" and voice == "voice":
+                raise ValueError(
+                    "v2-6 模型的标准画质（720p）不支持生成音频，请关闭生成音频或切换至 1080p。"
+                )
+
         # ── 多镜头检测 ────────────────────────────────────────────────
         multi_prompt_list = []
         for i in range(1, 7):
             sb_prompt = kwargs.get(f"镜头{i}_提示词", "").strip()
             if sb_prompt:
-                sb_duration = kwargs.get(f"镜头{i}_时长", 5)
+                raw_dur = kwargs.get(f"镜头{i}_时长", "5")
+                try:
+                    sb_duration = int(str(raw_dur).strip()) if str(raw_dur).strip() else 5
+                except ValueError:
+                    sb_duration = 5
                 multi_prompt_list.append({
                     "index": i,
                     "prompt": sb_prompt,
@@ -219,7 +236,7 @@ class KlingVideo:
 
         # ── 构建模型名 & 请求体 ───────────────────────────────────────
         import json, base64, copy
-        model_name = f"kling-v3-{mode}-{duration}s-{voice}"
+        model_name = f"kling-{model_ver}-{mode}-{duration}s-{voice}"
 
         body = {
             "model":    model_name,
@@ -312,7 +329,7 @@ class KlingVideo:
 
 
 class KlingFirstLastFrame:
-    """Kling 3.0 首尾帧到视频节点"""
+    """Kling 首尾帧到视频节点"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -321,10 +338,10 @@ class KlingFirstLastFrame:
                 "首帧": ("IMAGE",),
                 "尾帧": ("IMAGE",),
                 "提示词": ("STRING", {"multiline": True, "default": ""}),
+                "模型": (["v3", "v2-6"], {"default": "v3"}),
+                "分辨率": (["1080p", "720p"],),
                 "时长": ([5, 10, 15],),
                 "生成音频": (["打开", "关闭"], {"default": "打开"}),
-                "模型": (["v3"],),
-                "分辨率": (["1080p", "720p"],),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffff}),
             }
         }
@@ -341,7 +358,7 @@ class KlingFirstLastFrame:
         duration     = kwargs["时长"]
         generate_audio = kwargs["生成音频"]
         model_base   = kwargs["模型"]
-        model_base   = "kling-" + model_base          # v3 → kling-v3（后端值还原）
+        model_base   = "kling-" + model_base          # v3/v2-6 → kling-v3/kling-v2-6（后端值还原）
         resolution   = kwargs["分辨率"]
         seed         = kwargs.get("seed", 0)  # noqa: F841 — 触发 ComfyUI 缓存刷新
 
@@ -351,9 +368,22 @@ class KlingFirstLastFrame:
         if duration not in (5, 10, 15):
             raise ValueError(f"时长仅支持 5、10、15 秒，当前值为 {duration}，请重新选择。")
 
-        # 拼接模型名：kling-v3-{mode}-{dur}s-{voice}
+        # 拼接模型名：kling-{ver}-{mode}-{dur}s-{voice}
         mode  = "pro" if resolution == "1080p" else "std"
         voice = "voice" if generate_audio == "打开" else "novoice"
+
+        # ── v2-6 模型约束校验 ──────────────────────────────────────────
+        model_ver = kwargs["模型"]   # "v3" or "v2-6"
+        if model_ver == "v2-6":
+            if duration == 15:
+                raise ValueError(
+                    "v2-6 模型不支持 15s 时长，请选择 5s 或 10s。"
+                )
+            if mode == "std" and voice == "voice":
+                raise ValueError(
+                    "v2-6 模型的标准画质（720p）不支持生成音频，请关闭生成音频或切换至 1080p。"
+                )
+
         model_name = f"{model_base}-{mode}-{duration}s-{voice}"
 
         # 图片校验 & 转 base64
@@ -459,10 +489,11 @@ class KlingMotionControlTest:
                 "参考视频":   ("VIDEO",),
             },
             "optional": {
-                "保留原声":   ("BOOLEAN", {"default": True}),
+                "模型":       (["v3", "v2-6"], {"default": "v3"}),
+                "分辨率":     (["1080p", "720p"],),
+                "时长":       ([5, 10, 15], {"default": 5}),
                 "人物朝向":   (["video", "image"],),
-                "画质模式":   (["专家", "标准"],),
-                "模型版本":   (["v3"],),
+                "保留原声":   (["打开", "关闭"], {"default": "打开"}),
                 "seed":       ("INT", {"default": 0, "min": 0, "max": 0xffffffff}),
             },
         }
@@ -473,18 +504,19 @@ class KlingMotionControlTest:
     CATEGORY = "comfyui_o1key/Kling"
 
     async def generate(self, **kwargs):
-        """动作控制（测试）：VIDEO 类型参考视频 + 图片人物动作迁移"""
+        """动作控制：VIDEO 类型参考视频 + 图片人物动作迁移（走 new API 三段式）"""
         import base64
 
         prompt                = kwargs["提示词"]
         reference_image       = kwargs["参考图片"]
         reference_video       = kwargs["参考视频"]
-        keep_original_sound   = kwargs.get("保留原声", True)
+        keep_original_sound   = kwargs.get("保留原声", "打开")
         character_orientation = kwargs.get("人物朝向", "video")
-        mode                  = kwargs.get("画质模式", "专家")
-        mode                  = "pro" if mode == "专家" else "std"  # 映射为 API 参数值
-        model                 = kwargs.get("模型版本", "v3")
-        model                 = "kling-" + model              # v3 → kling-v3（后端值还原）
+        mode                  = kwargs.get("分辨率", "1080p")
+        duration              = kwargs.get("时长", 5)
+        mode_api              = "pro" if mode == "1080p" else "std"  # 映射为 API 参数值
+        model                 = kwargs.get("模型", "v3")
+        model_name            = f"kling-{model}-motion-{mode_api}-{duration}s"
         seed                  = kwargs.get("seed", 0)  # noqa: F841 — 触发 ComfyUI 缓存刷新
 
         # ── 校验提示词 ────────────────────────────────────────────────
@@ -495,7 +527,6 @@ class KlingMotionControlTest:
         image_b64 = _tensor_to_base64(reference_image)
 
         # ── 从 VIDEO 对象获取本地文件路径并读取 ───────────────────────
-        # ComfyUI VIDEO 对象有 .source_path 或通过 VideoFromFile 构造
         video_path = None
         if hasattr(reference_video, "source_path"):
             video_path = reference_video.source_path
@@ -537,7 +568,6 @@ class KlingMotionControlTest:
                             f"参考视频时长须在 3~10 秒之间，当前为 {duration_sec:.1f}s。"
                         )
         except FileNotFoundError:
-            # ffprobe 不可用时跳过时长校验，但打印提示
             print("[动作控制] 警告：ffprobe 未找到，跳过视频时长校验。")
         except ValueError:
             raise
@@ -548,21 +578,21 @@ class KlingMotionControlTest:
         with open(video_path, "rb") as f:
             video_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-        # ── 构建请求体 ────────────────────────────────────────────────
+        # ── 构建请求体（new API 格式）─────────────────────────────────
         body = {
+            "model":                 model_name,
             "prompt":                prompt,
+            "image_url":             image_b64,
+            "video_url":             video_b64,
             "character_orientation": character_orientation,
-            "mode":                  mode,
-            "model":                 model,
-            "keep_original_sound":   "yes" if keep_original_sound else "no",
-            "image":                 image_b64,
-            "video":                 video_b64,
+            "mode":                  mode_api,
+            "keep_original_sound":   "yes" if keep_original_sound == "打开" else "no",
         }
 
         # ── 保存路径 ──────────────────────────────────────────────────
         video_dir = _get_video_output_dir()
-        counter   = _get_next_counter(video_dir, "kling_motion_test")
-        save_path = os.path.join(video_dir, f"kling_motion_test_{counter:05d}.mp4")
+        counter   = _get_next_counter(video_dir, "kling_motion")
+        save_path = os.path.join(video_dir, f"kling_motion_{counter:05d}.mp4")
 
         client = KlingClient()
 
@@ -592,8 +622,7 @@ class KlingMotionControlTest:
             if pbar: pbar.update_absolute(mapped, 100)
 
         try:
-            result_path = await client.generate_async(
-                endpoint_type="motion_control",
+            result_path = await client.motion_control_async(
                 body=body,
                 save_path=save_path,
                 on_stage=on_stage,
@@ -729,8 +758,8 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "KlingVideo": "自研模型 3.0 视频",
-    "KlingFirstLastFrame": "自研模型 3.0 首尾帧到视频",
-    "KlingMotionControlTest": "自研模型 动作控制（测试）",
+    "KlingVideo": "文/图生视频 自研模型",
+    "KlingFirstLastFrame": "首尾帧生视频 自研模型",
+    "KlingMotionControlTest": "动作控制 自研模型",
     "AspectRatioPreset": "图片宽高比预设",
 }
