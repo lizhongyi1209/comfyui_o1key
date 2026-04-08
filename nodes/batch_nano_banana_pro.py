@@ -134,7 +134,7 @@ class BatchNanoBananaPro:
     ]
     
     # 支持的分辨率列表（全量兜底，实际由 get_all_supported_resolutions() 动态生成）
-    RESOLUTIONS = ["512", "1K", "2K", "4K"]
+    RESOLUTIONS = ["512px", "1K", "2K", "4K"]
     
     # 配对模式
     PAIRING_MODES = ["按相同图片命名", "1*N", "不配对"]
@@ -298,6 +298,11 @@ class BatchNanoBananaPro:
                 "保存路径": ("STRING", {
                     "default": "",
                     "multiline": False
+                }),
+                "跳过错误": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "打开",
+                    "label_off": "关闭"
                 })
             },
             "optional": optional_inputs
@@ -775,6 +780,7 @@ class BatchNanoBananaPro:
         模型: str,
         宽高比: str,
         分辨率: str,
+        跳过错误: bool = False,
         保存路径: str = "",
         **kwargs
     ) -> Tuple[torch.Tensor]:
@@ -1089,19 +1095,30 @@ class BatchNanoBananaPro:
                 # 用户输入错误 - 打印完整错误信息
                 error_msg = str(e)
                 print(f"BatchNanoBananaPro: ❌ {error_msg}")
+            if 跳过错误:
+                print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
+                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
+                return (pil_to_tensor([placeholder]),)
             raise ValueError(error_msg) from None
-        
+
         except RuntimeError as e:
             # 打印完整错误信息
             error_full = str(e)
             print(f"BatchNanoBananaPro: ❌ {error_full}")
+            if 跳过错误:
+                print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
+                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
+                return (pil_to_tensor([placeholder]),)
             raise RuntimeError(error_full) from None
-        
+
         except Exception as e:
             # 其他未知错误 - 打印完整错误信息
             error_msg = str(e)
             print(f"BatchNanoBananaPro: ❌ {error_msg}")
-            
+            if 跳过错误:
+                print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
+                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
+                return (pil_to_tensor([placeholder]),)
             raise type(e)(error_msg) from None
         
         finally:

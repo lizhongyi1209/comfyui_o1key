@@ -52,10 +52,10 @@ except ImportError:
 # ============================================================================
 # 是否启用调试日志（打印完整的 API 响应内容）
 # 设置为 True 以启用调试日志，False 以禁用
-DEBUG_LOG_ENABLED = False
+DEBUG_LOG_ENABLED = True
 # 是否启用请求体日志（打印发送给 API 的请求体，base64 图片数据将自动截断）
 # 设置为 True 以启用请求体日志，False 以禁用
-REQUEST_LOG_ENABLED = False
+REQUEST_LOG_ENABLED = True
 # ============================================================================
 
 _NODE = "Nano Banana Pro"
@@ -119,7 +119,7 @@ class NanoBananaPro:
     ]
     
     # 支持的分辨率列表（全量兜底，实际由 get_all_supported_resolutions() 动态生成）
-    RESOLUTIONS = ["512", "1K", "2K", "4K"]
+    RESOLUTIONS = ["512px", "1K", "2K", "4K"]
     
     def __init__(self):
         """初始化节点"""
@@ -199,6 +199,11 @@ class NanoBananaPro:
                     "default": 0,
                     "min": 0,
                     "max": 0xffffffffffffffff
+                }),
+                "跳过错误": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "打开",
+                    "label_off": "关闭"
                 })
             },
             "optional": optional_inputs
@@ -452,6 +457,7 @@ class NanoBananaPro:
         像素缩放: bool,
         分辨率像素: float,
         seed: int,
+        跳过错误: bool = False,
         **kwargs
     ) -> Tuple[torch.Tensor]:
         """
@@ -873,18 +879,30 @@ class NanoBananaPro:
                 # 用户输入错误 - 打印完整错误信息
                 error_msg = str(e)
                 print(f"Nano Banana Pro: ❌ {error_msg}")
+            if 跳过错误:
+                print("Nano Banana Pro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
+                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
+                return (pil_to_tensor([placeholder]),)
             raise ValueError(error_msg) from None
-        
+
         except RuntimeError as e:
             # 打印完整错误信息
             error_full = str(e)
             print(f"Nano Banana Pro: ❌ {error_full}")
+            if 跳过错误:
+                print("Nano Banana Pro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
+                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
+                return (pil_to_tensor([placeholder]),)
             raise RuntimeError(error_full) from None
-        
+
         except Exception as e:
             # 其他未知错误 - 打印完整错误信息
             error_msg = str(e)
             print(f"Nano Banana Pro: ❌ {error_msg}")
+            if 跳过错误:
+                print("Nano Banana Pro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
+                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
+                return (pil_to_tensor([placeholder]),)
             raise type(e)(error_msg) from None
         
         finally:

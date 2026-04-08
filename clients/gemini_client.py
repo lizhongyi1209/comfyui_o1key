@@ -62,8 +62,20 @@ class GeminiAPIClient(BaseAPIClient):
             else:
                 return "/v1beta/models/nano-banana-pro-2k:generateContent"
 
+        elif model == "nano-banana-2-限时特价":
+            if resolution == "512px":
+                return "/v1beta/models/nano-banana-2-0.5k:generateContent"
+            elif resolution == "1K":
+                return "/v1beta/models/nano-banana-2-1k:generateContent"
+            elif resolution == "2K":
+                return "/v1beta/models/nano-banana-2-2k:generateContent"
+            elif resolution == "4K":
+                return "/v1beta/models/nano-banana-2-4k:generateContent"
+            else:
+                return "/v1beta/models/nano-banana-2-2k:generateContent"
+
         elif model == "nano-banana-2-官方计费":
-            if resolution == "512":
+            if resolution == "512px":
                 return "/v1beta/models/nano-banana-2-0.5k-official:generateContent"
             elif resolution == "1K":
                 return "/v1beta/models/nano-banana-2-1k-official:generateContent"

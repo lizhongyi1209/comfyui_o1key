@@ -67,15 +67,15 @@ GEMINI_MODELS = [
     },
     {
         "id": "nano-banana-2-限时特价",
-        "description": "Nano Banana 2 限时特价，固定端点，图像生成模型",
+        "description": "Nano Banana 2 限时特价，根据分辨率自动选择端点 (512px/1K/2K/4K)，图像生成模型",
         "enabled": True,
-        "endpoint_type": "standard",
-        "endpoint": "/v1beta/models/nano-banana-2:generateContent",
+        "endpoint_type": "dynamic",
+        "endpoint": None,  # 动态端点，由代码根据分辨率选择
         "supported_aspect_ratios": [
             "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4",
             "8:1", "9:16", "16:9", "21:9"
         ],
-        "supported_resolutions": ["512", "1K", "2K", "4K"]
+        "supported_resolutions": ["512px", "1K", "2K", "4K"]
     },
     {
         "id": "nano-banana-2-官方计费",
@@ -87,7 +87,7 @@ GEMINI_MODELS = [
             "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4",
             "8:1", "9:16", "16:9", "21:9"
         ],
-        "supported_resolutions": ["512", "1K", "2K", "4K"]
+        "supported_resolutions": ["512px", "1K", "2K", "4K"]
     },
     {
         "id": "gemini-3-pro-image-preview",
@@ -110,7 +110,7 @@ GEMINI_MODELS = [
             "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4",
             "8:1", "9:16", "16:9", "21:9"
         ],
-        "supported_resolutions": ["512", "1K", "2K", "4K"]
+        "supported_resolutions": ["512px", "1K", "2K", "4K"]
     }
 ]
 
@@ -329,7 +329,7 @@ def get_all_supported_resolutions() -> List[str]:
         >>> get_all_supported_resolutions()
         ['512', '1K', '2K', '4K']
     """
-    _ORDER = ["512", "1K", "2K", "4K"]
+    _ORDER = ["512px", "1K", "2K", "4K"]
 
     seen = set()
     for model in GEMINI_MODELS:
