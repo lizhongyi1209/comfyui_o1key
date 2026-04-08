@@ -92,37 +92,47 @@ class SeedanceClient:
                     raise RuntimeError(f"状态查询失败 ({resp.status}): {msg}")
                 result = json.loads(text)
 
-            status = (result.get("status") or "").lower()
+            # new-api 包装格式：真实数据在 result["data"] 里
+            inner = result.get("data") or result
 
-            # 调试：打印原始响应（排查状态字段问题后可删除）
-            print(f"[Seedance][DEBUG] 原始响应: {result}")
+            status = (inner.get("status") or "").lower()
 
             # 解析进度
-            progress_raw = result.get("progress", "0")
+            progress_raw = inner.get("progress", "0")
             try:
                 progress_pct = int(str(progress_raw).rstrip("%").strip())
             except (ValueError, AttributeError):
                 progress_pct = 0
 
-            print(f"[Seedance] 生成中 {progress_pct}%  (status={status})")
+            print(f"[Seedance] 生成中 {progress_pct}%")
             if on_progress:
                 on_progress(progress_pct)
 
             if status in self.SUCCESS_STATUSES:
-                # 取视频 URL：url / metadata.url / output.video_url
+                # 响应结构：result["data"] = inner，inner["data"] = platform_data
+                # 视频 URL 在 inner["result_url"] 或 inner["data"]["content"]["video_url"]
+                platform_data = inner.get("data") or {}
+                content = platform_data.get("content") or {}
                 video_url = (
-                    result.get("url")
-                    or (result.get("output") or {}).get("video_url")
-                    or (result.get("metadata") or {}).get("url")
+                    inner.get("result_url")
+                    or content.get("video_url")
+                    or platform_data.get("video_url")
+                    or inner.get("url")
                 )
                 if not video_url:
                     raise RuntimeError(f"任务成功但未找到视频 URL，响应：{result}")
-                return video_url
+                # 末帧图片 URL 在 inner["data"]["content"]["last_frame_url"]
+                last_frame_url = (
+                    content.get("last_frame_url")
+                    or platform_data.get("last_frame_url")
+                    or inner.get("last_frame_url")
+                )
+                return video_url, last_frame_url
 
             if status in self.FAILURE_STATUSES:
                 reason = (
-                    result.get("fail_reason")
-                    or (result.get("error") or {}).get("message")
+                    inner.get("fail_reason")
+                    or (inner.get("error") or {}).get("message")
                     or "未知错误"
                 )
                 raise RuntimeError(f"视频生成失败：{reason}")
@@ -157,8 +167,8 @@ class SeedanceClient:
         save_path: str,
         on_stage: Optional[Callable[[str], None]] = None,
         on_progress: Optional[Callable[[int], None]] = None,
-    ) -> str:
-        """提交 → 轮询 → 下载，返回本地文件路径"""
+    ) -> tuple:
+        """提交 → 轮询 → 下载，返回 (本地视频路径, 末帧图片URL或None)"""
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
 
@@ -171,7 +181,7 @@ class SeedanceClient:
                 on_stage(f"submitted:{task_id}")
 
             # 轮询
-            video_url = await self.poll_async(task_id, session, on_progress=on_progress)
+            video_url, last_frame_url = await self.poll_async(task_id, session, on_progress=on_progress)
 
             # 下载
             if on_stage:
@@ -180,4 +190,4 @@ class SeedanceClient:
 
             if on_stage:
                 on_stage("done")
-            return path
+            return path, last_frame_url

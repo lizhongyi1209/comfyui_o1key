@@ -20,6 +20,6 @@ from .multi_res_preview import MultiResPreview
 from .batch_images_o1key import BatchImagesO1key
 from .nano_banana_v2 import NanaBananaV2
 from .batch_nano_banana_v2 import BatchNanaBananaV2
-from .seedance_video import SeedanceT2V, SeedanceI2V, SeedanceFlipFlop
+from .seedance_video import Seedance
 
-__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'QuanNengShengTu', 'BatchQuanNengShengTu', 'MultiResPreview', 'BatchImagesO1key', 'NanaBananaV2', 'BatchNanaBananaV2', 'SeedanceT2V', 'SeedanceI2V', 'SeedanceFlipFlop']
+__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'QuanNengShengTu', 'BatchQuanNengShengTu', 'MultiResPreview', 'BatchImagesO1key', 'NanaBananaV2', 'BatchNanaBananaV2', 'Seedance']

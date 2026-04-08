@@ -21,7 +21,7 @@ except Exception:
 
 import ssl
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, QuanNengShengTu, BatchQuanNengShengTu, AspectRatioPreset, MultiResPreview, BatchImagesO1key, SeedanceT2V, SeedanceI2V, SeedanceFlipFlop
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, QuanNengShengTu, BatchQuanNengShengTu, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -79,9 +79,7 @@ NODE_CLASS_MAPPINGS = {
     "AspectRatioPreset": AspectRatioPreset,
     "MultiResPreview": MultiResPreview,
     "BatchImagesO1key": BatchImagesO1key,
-    "SeedanceT2V": SeedanceT2V,
-    "SeedanceI2V": SeedanceI2V,
-    "SeedanceFlipFlop": SeedanceFlipFlop,
+    "Seedance": Seedance,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -104,9 +102,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "AspectRatioPreset": "图片宽高比预设",
     "MultiResPreview": "预览图像（v2）",
     "BatchImagesO1key": "加载图像（批量）",
-    "SeedanceT2V": "Seedance 文生视频",
-    "SeedanceI2V": "Seedance 图生视频",
-    "SeedanceFlipFlop": "Seedance 首尾帧生视频",
+    "Seedance": "Seedance 视频生成",
 }
 
 WEB_DIRECTORY = "./web"
