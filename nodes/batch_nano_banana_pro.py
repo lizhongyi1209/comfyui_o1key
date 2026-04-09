@@ -704,18 +704,6 @@ class BatchNanoBananaPro:
                         print(f"BatchNanoBananaPro: 任务 {completed}/{total_tasks} 成功 ✓")
                     else:
                         fail_count += 1
-                        # 打印完整错误信息（用于排查问题）
-                        error_msg = result_data.get("error", "未知错误") if result_data else "未知错误"
-                        print(f"BatchNanoBananaPro: 任务 {completed}/{total_tasks} 失败 ✗")
-                        print(f"=" * 80)
-                        print(f"🔍 【原始报错信息展示】")
-                        print(f"=" * 80)
-                        print(f"任务编号: {completed}/{total_tasks}")
-                        print(f"失败时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-                        print(f"-" * 80)
-                        print(f"错误详情:")
-                        print(error_msg)
-                        print(f"=" * 80)
 
                     # 更新 ComfyUI 原生进度条
                     if pbar is not None:
@@ -993,7 +981,6 @@ class BatchNanoBananaPro:
                     print("BatchNanoBananaPro: 任务执行超时（1小时）")
                     raise RuntimeError("任务执行超时，请减少任务数量或检查网络连接")
                 except Exception as e:
-                    print(f"BatchNanoBananaPro: 任务执行失败: {str(e)}")
                     # 即使失败，也尝试返回部分结果
                     if 'all_saved_files' in locals():
                         print(f"BatchNanoBananaPro: 部分保存的图片: {len(all_saved_files)} 张")
@@ -1091,35 +1078,25 @@ class BatchNanoBananaPro:
             if str(e) == "未授权！":
                 print("请联系作者授权后方可使用！")
                 raise ValueError("未授权！") from None
-            else:
-                # 用户输入错误 - 打印完整错误信息
-                error_msg = str(e)
-                print(f"BatchNanoBananaPro: ❌ {error_msg}")
             if 跳过错误:
                 print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
                 placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
                 return (pil_to_tensor([placeholder]),)
-            raise ValueError(error_msg) from None
+            raise ValueError(str(e)) from None
 
         except RuntimeError as e:
-            # 打印完整错误信息
-            error_full = str(e)
-            print(f"BatchNanoBananaPro: ❌ {error_full}")
             if 跳过错误:
                 print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
                 placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
                 return (pil_to_tensor([placeholder]),)
-            raise RuntimeError(error_full) from None
+            raise RuntimeError(str(e)) from None
 
         except Exception as e:
-            # 其他未知错误 - 打印完整错误信息
-            error_msg = str(e)
-            print(f"BatchNanoBananaPro: ❌ {error_msg}")
             if 跳过错误:
                 print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
                 placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
                 return (pil_to_tensor([placeholder]),)
-            raise type(e)(error_msg) from None
+            raise type(e)(str(e)) from None
         
         finally:
             # 查询余额

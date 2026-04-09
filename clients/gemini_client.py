@@ -518,9 +518,6 @@ class GeminiAPIClient(BaseAPIClient):
         try:
             response = await self.request_async(endpoint, request_body, session)
         except Exception as e:
-            request_time = time.time() - request_start
-            error_first_line = str(e).split('\n')[0]
-            print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → 失败: {error_first_line} ✗")
             raise
         
         request_time = time.time() - request_start
@@ -719,8 +716,6 @@ class GeminiAPIClient(BaseAPIClient):
                         # 传递完整的错误信息（用于排查问题）
                         if progress_callback:
                             progress_callback(completed, batch_size, False, error_msg)
-                        
-                        print(f"GeminiClient: 任务 {completed}/{batch_size} 失败 ✗")
                 
                 # 当前批次完成后，立即清理内存
                 if batch_images:
