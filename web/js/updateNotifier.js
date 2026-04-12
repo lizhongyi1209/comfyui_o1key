@@ -1,5 +1,27 @@
 import { api } from "../../../scripts/api.js";
 
+function startCountdown(toast, closeBtn, seconds, accentColor) {
+    let remaining = seconds;
+    closeBtn.textContent = `× ${remaining}s`;
+
+    const interval = setInterval(() => {
+        remaining--;
+        if (remaining <= 0) {
+            clearInterval(interval);
+            toast.style.transition = "opacity 0.4s ease";
+            toast.style.opacity = "0";
+            setTimeout(() => toast.remove(), 400);
+        } else {
+            closeBtn.textContent = `× ${remaining}s`;
+        }
+    }, 1000);
+
+    closeBtn.onclick = () => {
+        clearInterval(interval);
+        toast.remove();
+    };
+}
+
 api.addEventListener("o1key.update_available", (event) => {
     const message = event.detail?.message || "欢迎使用o1key工作流";
 
@@ -9,7 +31,6 @@ api.addEventListener("o1key.update_available", (event) => {
             from { opacity: 0; transform: translateY(16px) scale(0.97); }
             to   { opacity: 1; transform: translateY(0) scale(1); }
         }
-        .o1key-toast-close:hover { color: #fff !important; }
     `;
     document.head.appendChild(style);
 
@@ -31,30 +52,14 @@ api.addEventListener("o1key.update_available", (event) => {
     `;
 
     const header = document.createElement("div");
-    header.style.cssText = `
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 10px;
-    `;
+    header.style.cssText = `display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;`;
 
     const title = document.createElement("span");
     title.textContent = "🐴 o1key 工作流";
     title.style.cssText = `font-weight: bold; font-size: 13px; color: #82e0aa; letter-spacing: 0.5px;`;
 
     const closeBtn = document.createElement("button");
-    closeBtn.textContent = "×";
-    closeBtn.className = "o1key-toast-close";
-    closeBtn.style.cssText = `
-        background: none;
-        border: none;
-        color: #82e0aa;
-        font-size: 20px;
-        cursor: pointer;
-        padding: 0;
-        line-height: 1;
-    `;
-    closeBtn.onclick = () => toast.remove();
+    closeBtn.style.cssText = `background: none; border: none; color: #82e0aa; font-size: 13px; cursor: pointer; padding: 0; line-height: 1;`;
 
     header.appendChild(title);
     header.appendChild(closeBtn);
@@ -70,6 +75,8 @@ api.addEventListener("o1key.update_available", (event) => {
     toast.appendChild(divider);
     toast.appendChild(text);
     document.body.appendChild(toast);
+
+    startCountdown(toast, closeBtn, 5, "#82e0aa");
 });
 
 api.addEventListener("o1key.new_version", (event) => {
@@ -81,7 +88,6 @@ api.addEventListener("o1key.new_version", (event) => {
             from { opacity: 0; transform: translateY(16px) scale(0.97); }
             to   { opacity: 1; transform: translateY(0) scale(1); }
         }
-        .o1key-update-close:hover { color: #fff !important; }
     `;
     document.head.appendChild(style);
 
@@ -94,7 +100,7 @@ api.addEventListener("o1key.new_version", (event) => {
         color: #d6eaf8;
         border: 1px solid #2e86c1;
         border-radius: 12px;
-        padding: 18px 20px 16px 20px;
+        padding: 12px 16px;
         font-size: 14px;
         z-index: 100000;
         box-shadow: 0 6px 24px rgba(46,134,193,0.35), 0 2px 8px rgba(0,0,0,0.5);
@@ -103,40 +109,39 @@ api.addEventListener("o1key.new_version", (event) => {
     `;
 
     const header = document.createElement("div");
-    header.style.cssText = `display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;`;
+    header.style.cssText = `display: flex; align-items: center; justify-content: space-between;`;
 
     const title = document.createElement("span");
     title.textContent = "🔔 检测到有新版本发布！";
     title.style.cssText = `font-weight: bold; font-size: 13px; color: #7fb3d3; letter-spacing: 0.5px;`;
 
     const closeBtn = document.createElement("button");
-    closeBtn.textContent = "×";
-    closeBtn.className = "o1key-update-close";
-    closeBtn.style.cssText = `background: none; border: none; color: #7fb3d3; font-size: 20px; cursor: pointer; padding: 0; line-height: 1;`;
-    closeBtn.onclick = () => toast.remove();
+    closeBtn.style.cssText = `background: none; border: none; color: #7fb3d3; font-size: 13px; cursor: pointer; padding: 0; line-height: 1;`;
 
     header.appendChild(title);
     header.appendChild(closeBtn);
 
     const divider = document.createElement("div");
-    divider.style.cssText = `height: 1px; background: rgba(46,134,193,0.3); margin-bottom: 10px;`;
+    divider.style.cssText = `height: 1px; background: rgba(46,134,193,0.3); margin: 8px 0;`;
+
+    toast.appendChild(header);
+    toast.appendChild(divider);
 
     const body = document.createElement("div");
     const items = changelog.length > 0 ? changelog : ["暂无更新说明"];
     items.forEach(item => {
         const line = document.createElement("div");
         line.textContent = `• ${item}`;
-        line.style.cssText = `margin-bottom: 4px; font-size: 13px; line-height: 1.6; color: #d6eaf8;`;
+        line.style.cssText = `margin-bottom: 4px; font-size: 12px; line-height: 1.6; color: #d6eaf8;`;
         body.appendChild(line);
     });
-
     const more = document.createElement("div");
     more.textContent = "...";
-    more.style.cssText = `color: #7fb3d3; font-size: 13px; margin-top: 4px;`;
+    more.style.cssText = `color: #7fb3d3; font-size: 12px; margin-top: 2px;`;
     body.appendChild(more);
 
-    toast.appendChild(header);
-    toast.appendChild(divider);
     toast.appendChild(body);
     document.body.appendChild(toast);
+
+    startCountdown(toast, closeBtn, 5, "#7fb3d3");
 });

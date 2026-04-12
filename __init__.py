@@ -15,8 +15,7 @@ try:
 
     notify_update_available()  # TODO: 测试用，改回 if check_for_updates(): notify_update_available()
 
-    if check_for_updates():
-        notify_new_version()
+    notify_new_version()  # TODO: 测试用，改回 if check_for_updates(): notify_new_version()
 except Exception:
     # 静默失败，不影响插件加载
     pass

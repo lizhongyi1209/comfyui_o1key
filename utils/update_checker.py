@@ -72,18 +72,40 @@ def check_for_updates() -> bool:
 
 
 def get_update_changelog() -> list:
-    """获取远程新版本的 commit 摘要（最多3条）"""
+    """从远程 CHANGELOG.md 最新版本块中提取更新内容（最多3条）"""
     try:
         plugin_dir = os.path.dirname(os.path.dirname(__file__))
+        # 读取远程最新的 CHANGELOG.md
         result = subprocess.run(
-            ['git', 'log', 'HEAD..origin/main', '--pretty=format:%s', '--no-merges'],
+            ['git', 'show', 'origin/main:CHANGELOG.md'],
             cwd=plugin_dir,
             capture_output=True,
             text=True,
             encoding='utf-8'
         )
-        lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
-        return lines[:3]
+        lines = result.stdout.splitlines()
+
+        # 找到第一个版本块（## [x.x.x]）
+        in_block = False
+        items = []
+        for line in lines:
+            if line.startswith('## [') and not line.startswith('## [Unreleased]'):
+                if in_block:
+                    break  # 遇到下一个版本块，停止
+                in_block = True
+                continue
+            if in_block:
+                stripped = line.strip()
+                # 提取有实际内容的行（跳过标题、空行、分隔线）
+                if stripped and not stripped.startswith('#') and not stripped.startswith('---') and not stripped.startswith('-  '):
+                    # 去掉 markdown 列表符号和加粗
+                    text = stripped.lstrip('- ').replace('**', '').strip()
+                    if text and len(text) > 3:
+                        items.append(text)
+                if len(items) >= 3:
+                    break
+
+        return items
     except Exception:
         return []
 
@@ -91,7 +113,6 @@ def get_update_changelog() -> list:
 def notify_new_version():
     """检测到新版本时，推送蓝色更新通知弹框"""
     changelog = get_update_changelog()
-    print("[o1key] 检测到新版本，准备推送更新通知")
 
     try:
         import threading
@@ -103,22 +124,16 @@ def notify_new_version():
                     "o1key.new_version",
                     {"changelog": changelog}
                 )
-                print("[o1key] 新版本通知已发送到前端")
-            except Exception as e:
-                print(f"[o1key] 发送新版本通知失败: {e}")
+            except Exception:
+                pass
 
-        threading.Timer(5.0, _send).start()
+        threading.Timer(3.0, _send).start()
     except Exception:
         pass
 
 
 def notify_update_available():
-    """通知用户有更新可用（前端弹窗 + 控制台）"""
-    current_version = get_current_version()
-    version_str = f" (当前版本: {current_version})" if current_version else ""
-
-    print(f"[comfyui_o1key] 有新版本可用{version_str}")
-
+    """通知用户有更新可用（前端弹窗）"""
     try:
         import threading
         from server import PromptServer
@@ -129,11 +144,9 @@ def notify_update_available():
                     "o1key.update_available",
                     {"message": "欢迎使用o1key工作流，祝您马年，马上有福，马上有钱，马到成功！！！"}
                 )
-                print("[o1key] 更新通知已发送到前端")
-            except Exception as e:
-                print(f"[o1key] 发送通知失败: {e}")
+            except Exception:
+                pass
 
-        # 延迟 5 秒发送，确保前端 WebSocket 已连接
-        threading.Timer(5.0, _send).start()
+        threading.Timer(3.0, _send).start()
     except Exception:
         pass
