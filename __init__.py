@@ -13,9 +13,10 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 try:
     from .utils.update_checker import check_for_updates, notify_update_available, notify_new_version
 
-    notify_update_available()  # TODO: 测试用，改回 if check_for_updates(): notify_update_available()
+    notify_update_available()
 
-    notify_new_version()  # TODO: 测试用，改回 if check_for_updates(): notify_new_version()
+    if check_for_updates():
+        notify_new_version()
 except Exception:
     # 静默失败，不影响插件加载
     pass
