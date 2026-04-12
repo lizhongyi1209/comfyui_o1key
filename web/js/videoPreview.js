@@ -124,7 +124,7 @@ app.registerExtension({
             // 节点头部 + 其他 widget 的高度
             // LiteGraph 节点头部约 30px，每个普通 widget 约 24px
             const NON_VIDEO_WIDGETS = (this.widgets?.filter(
-                (w) => w.name !== "video_preview"
+                (w) => w.name !== "video_preview_widget"
             ).length ?? 0);
             const headerH = 58 + NON_VIDEO_WIDGETS * 24;
 
@@ -138,11 +138,8 @@ app.registerExtension({
         const origOnResize = nodeType.prototype.onResize;
         nodeType.prototype.onResize = function (size) {
             if (origOnResize) origOnResize.apply(this, arguments);
-            if (this._videoAspectRatio && this._videoEl) {
-                // 用新宽度重新计算正确高度，避免拉伸/压缩
-                const innerW = Math.max(size[0] - 16, 10);
-                const videoH = Math.round(innerW * this._videoAspectRatio);
-                this._videoEl.style.height = videoH + "px";
+            if (this._videoAspectRatio) {
+                this._resizeToVideo();
             }
         };
     },

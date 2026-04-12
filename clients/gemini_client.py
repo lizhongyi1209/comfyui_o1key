@@ -141,7 +141,6 @@ class GeminiAPIClient(BaseAPIClient):
         resolution: str = "2K",
         enable_grounding: bool = False,
         enable_image_search: bool = False,
-        candidate_count: int = 1,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -154,7 +153,6 @@ class GeminiAPIClient(BaseAPIClient):
             resolution: 分辨率
             enable_grounding: 是否启用 Google Search Grounding
             enable_image_search: 是否同时启用 Google Image Search（仅 Gemini 3.1 Flash 支持）
-            candidate_count: 单次请求返回的候选图数量，默认 1
 
         Returns:
             请求体字典
@@ -184,7 +182,6 @@ class GeminiAPIClient(BaseAPIClient):
                 }
             ],
             "generationConfig": {
-                "candidateCount": candidate_count,
                 "responseModalities": ["TEXT", "IMAGE"],
                 "imageConfig": {
                     "aspectRatio": aspect_ratio,
@@ -303,7 +300,7 @@ class GeminiAPIClient(BaseAPIClient):
         # 需要关闭 session 的标记
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
         
         try:
@@ -438,7 +435,6 @@ class GeminiAPIClient(BaseAPIClient):
         debug_request: bool = False,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
-        candidate_count: int = 1
     ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
         单次异步生成请求（极简单行日志）
@@ -465,7 +461,7 @@ class GeminiAPIClient(BaseAPIClient):
         total_start = time.time()
         
         # 任务前缀
-        task_prefix = f"[{task_index}/{total_tasks}]" if task_index is not None and total_tasks else ""
+        task_prefix = f"[{task_index}/{total_tasks}] " if task_index is not None and total_tasks else ""
         
         # ========== 1. 构建请求 ==========
         build_start = time.time()
@@ -477,7 +473,6 @@ class GeminiAPIClient(BaseAPIClient):
             resolution=resolution,
             enable_grounding=enable_grounding,
             enable_image_search=enable_image_search,
-            candidate_count=candidate_count
         )
         build_time = time.time() - build_start
         
@@ -499,7 +494,7 @@ class GeminiAPIClient(BaseAPIClient):
             safe_request = _truncate_base64_req(request_body)
             print(
                 f"\n{'='*60}\n"
-                f"[请求体日志] 任务 {task_prefix or '?'} 发送请求体：\n"
+                f"[请求体日志] {task_prefix}发送请求体：\n"
                 f"端点: {endpoint}\n"
                 f"{_json.dumps(safe_request, ensure_ascii=False, indent=2)}\n"
                 f"{'='*60}\n"
@@ -541,7 +536,7 @@ class GeminiAPIClient(BaseAPIClient):
             safe_response = _truncate_base64(response)
             print(
                 f"\n{'='*60}\n"
-                f"[调试日志] 任务 {task_prefix or '?'} 完整 API 响应：\n"
+                f"[调试日志] {task_prefix}完整 API 响应：\n"
                 f"{_json.dumps(safe_response, ensure_ascii=False, indent=2)}\n"
                 f"{'='*60}\n"
             )
@@ -554,7 +549,7 @@ class GeminiAPIClient(BaseAPIClient):
         except Exception as e:
             parse_time = time.time() - parse_start
             error_first_line = str(e).split('\n')[0]
-            print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → 解析失败: {error_first_line} ✗")
+            print(f"{task_prefix}请求 {size_str} → API {request_time:.1f}s → 解析失败: {error_first_line} ✗")
             raise
         
         parse_time = time.time() - parse_start
@@ -578,7 +573,7 @@ class GeminiAPIClient(BaseAPIClient):
             download_info = f"{img_size_str}"
         
         # 单行输出
-        print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → {download_info} ✓")
+        print(f"{task_prefix}请求 {size_str} → API {request_time:.1f}s → {download_info} ✓")
         
         # 返回结果和计时信息
         total_time = time.time() - total_start
@@ -605,7 +600,6 @@ class GeminiAPIClient(BaseAPIClient):
         debug_request: bool = False,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
-        candidate_count: int = 1
     ) -> List[Image.Image]:
         """
         批量全并发生成 - 改进版：支持分批处理和内存管理
@@ -622,7 +616,6 @@ class GeminiAPIClient(BaseAPIClient):
             debug_request: 是否打印发送的请求体
             enable_grounding: 是否启用 Google Search Grounding
             enable_image_search: 是否同时启用 Google Image Search
-            candidate_count: 单次请求返回的候选图数量
 
         Returns:
             生成的图像列表
@@ -635,28 +628,23 @@ class GeminiAPIClient(BaseAPIClient):
         success_count = 0
         fail_count = 0
         first_error = None  # 保存第一个错误
-        
+
         # 分批处理配置
         max_concurrent = 10  # 最大并发数
         save_batch_size = 10  # 分批保存大小
-        
+
         # 计算需要多少批次
         num_batches = (batch_size + max_concurrent - 1) // max_concurrent
-        
-        print(f"GeminiClient: 批量生成 {batch_size} 张图片，并发数: {max_concurrent}，分 {num_batches} 批执行")
-        
-        connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
-        
+
+        connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
+
         async with aiohttp.ClientSession(connector=connector) as session:
             # 分批执行
             for batch_idx in range(num_batches):
                 batch_start = batch_idx * max_concurrent
                 batch_end = min(batch_start + max_concurrent, batch_size)
                 batch_size_current = batch_end - batch_start
-                
-                if num_batches > 1:
-                    print(f"GeminiClient: 执行第 {batch_idx + 1}/{num_batches} 批 ({batch_start + 1}-{batch_end})...")
-                
+
                 # 创建当前批次的任务
                 tasks = []
                 for i in range(batch_size_current):
@@ -675,7 +663,6 @@ class GeminiAPIClient(BaseAPIClient):
                             debug_request=debug_request,
                             enable_grounding=enable_grounding,
                             enable_image_search=enable_image_search,
-                            candidate_count=candidate_count
                         ),
                         name=f"task_{task_index}"
                     )
@@ -698,14 +685,11 @@ class GeminiAPIClient(BaseAPIClient):
                                 all_images.append(img)
                             
                             success_count += 1
-                            
+
                             # 通知进度
                             if progress_callback:
                                 progress_callback(completed, batch_size, True, None)
-                            
-                            # 每成功生成一张图片就打印日志
-                            print(f"GeminiClient: 任务 {completed}/{batch_size} 成功生成图片 ✓")
-                            
+
                     except Exception as e:
                         fail_count += 1
                         # 保存第一个错误（用于后续抛出）
@@ -719,25 +703,20 @@ class GeminiAPIClient(BaseAPIClient):
                 
                 # 当前批次完成后，立即清理内存
                 if batch_images:
-                    print(f"GeminiClient: 第 {batch_idx + 1} 批完成，生成 {len(batch_images)} 张图片")
-                    
-                    # 强制垃圾回收，释放内存
                     import gc
                     gc.collect()
-                    
-                    # 短暂暂停，让系统处理内存
                     await asyncio.sleep(0.1)
-                
+
                 # 清空当前批次图片引用，帮助垃圾回收
                 batch_images = []
-        
+
         # 最终结果检查
         if not all_images:
             # 如果有保存的原始错误，直接抛出原始错误
             if first_error:
                 raise first_error
             raise RuntimeError(f"批量生成失败，{fail_count} 个请求全部失败")
-        
+
         print(f"GeminiClient: 批量生成完成，成功 {success_count}/{batch_size}，失败 {fail_count}")
         return all_images
     
@@ -754,7 +733,6 @@ class GeminiAPIClient(BaseAPIClient):
         debug_request: bool = False,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
-        candidate_count: int = 1
     ) -> List[Image.Image]:
         """
         同步生成接口（用于 ComfyUI）
@@ -771,7 +749,6 @@ class GeminiAPIClient(BaseAPIClient):
             debug_request: 是否打印发送的请求体
             enable_grounding: 是否启用 Google Search Grounding
             enable_image_search: 是否同时启用 Google Image Search
-            candidate_count: 单次请求返回的候选图数量
 
         Returns:
             生成的图像列表
@@ -788,7 +765,6 @@ class GeminiAPIClient(BaseAPIClient):
             debug_request=debug_request,
             enable_grounding=enable_grounding,
             enable_image_search=enable_image_search,
-            candidate_count=candidate_count
         )
 
         return self.run_async_in_thread(coro)
@@ -837,13 +813,11 @@ class GeminiAPIClient(BaseAPIClient):
         fail_count = 0
         first_error = None  # 保存第一个错误
         total_tasks = len(prompts) * images_per_prompt
-        
+
         # 分批处理配置
         max_concurrent = 10  # 最大并发数
-        
-        print(f"GeminiClient: 多提示词批量生成，共 {total_tasks} 个任务，{len(prompts)} 个提示词，每个 {images_per_prompt} 张")
-        
-        connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
+
+        connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
         
         async with aiohttp.ClientSession(connector=connector) as session:
             # 创建所有任务
@@ -874,15 +848,12 @@ class GeminiAPIClient(BaseAPIClient):
             # 分批处理：每10个任务为一组
             batch_size = max_concurrent
             num_batches = (total_tasks + batch_size - 1) // batch_size
-            
+
             for batch_idx in range(num_batches):
                 batch_start = batch_idx * batch_size
                 batch_end = min(batch_start + batch_size, total_tasks)
                 batch_tasks = tasks[batch_start:batch_end]
-                
-                if num_batches > 1:
-                    print(f"GeminiClient: 执行第 {batch_idx + 1}/{num_batches} 批 ({batch_start + 1}-{batch_end})...")
-                
+
                 # 收集当前批次的结果
                 batch_images = []
                 
@@ -898,36 +869,26 @@ class GeminiAPIClient(BaseAPIClient):
                                 all_images.append(img)
                             
                             success_count += 1
-                            
+
                             # 通知进度
                             if progress_callback:
                                 progress_callback(completed, total_tasks, True, None)
-                            
-                            # 每成功生成一张图片就打印日志
-                            print(f"GeminiClient: 任务 {completed}/{total_tasks} 成功生成图片 ✓")
-                            
+
                     except Exception as e:
                         fail_count += 1
                         # 保存第一个错误（用于后续抛出）
                         if first_error is None:
                             first_error = e
                         error_msg = str(e)
-                        
+
                         # 传递完整的错误信息（用于排查问题）
                         if progress_callback:
                             progress_callback(completed, total_tasks, False, error_msg)
-                        
-                        print(f"GeminiClient: 任务 {completed}/{total_tasks} 失败 ✗")
-                
+
                 # 当前批次完成后，立即清理内存
                 if batch_images:
-                    print(f"GeminiClient: 第 {batch_idx + 1} 批完成，生成 {len(batch_images)} 张图片")
-                    
-                    # 强制垃圾回收，释放内存
                     import gc
                     gc.collect()
-                    
-                    # 短暂暂停，让系统处理内存
                     await asyncio.sleep(0.1)
                 
                 # 清空当前批次图片引用，帮助垃圾回收
@@ -938,8 +899,7 @@ class GeminiAPIClient(BaseAPIClient):
             if first_error:
                 raise first_error
             raise RuntimeError(f"批量生成失败，{fail_count} 个请求全部失败")
-        
-        print(f"GeminiClient: 多提示词批量生成完成，成功 {success_count}/{total_tasks}，失败 {fail_count}")
+
         return all_images
     
     def generate_multi_prompts_sync(

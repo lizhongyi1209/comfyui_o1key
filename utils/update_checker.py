@@ -72,15 +72,27 @@ def check_for_updates() -> bool:
 
 
 def notify_update_available():
-    """通知用户有更新可用"""
+    """通知用户有更新可用（前端弹窗 + 控制台）"""
     current_version = get_current_version()
     version_str = f" (当前版本: {current_version})" if current_version else ""
-    
-    print("\n" + "="*60)
-    print(f"🎉 Comfyui_o1key 有新版本可用{version_str}")
-    print("="*60)
-    print("更新方法：")
-    print("  Windows: 双击运行 update.bat")
-    print("  Linux/Mac: 运行 ./update.sh")
-    print("或手动执行: git pull origin main")
-    print("="*60 + "\n")
+
+    print(f"[comfyui_o1key] 有新版本可用{version_str}")
+
+    try:
+        import threading
+        from server import PromptServer
+
+        def _send():
+            try:
+                PromptServer.instance.send_sync(
+                    "o1key.update_available",
+                    {"message": "欢迎使用o1key工作流，祝您马年，马上有福，马上有钱，马到成功！！！"}
+                )
+                print("[o1key] 更新通知已发送到前端")
+            except Exception as e:
+                print(f"[o1key] 发送通知失败: {e}")
+
+        # 延迟 5 秒发送，确保前端 WebSocket 已连接
+        threading.Timer(5.0, _send).start()
+    except Exception:
+        pass

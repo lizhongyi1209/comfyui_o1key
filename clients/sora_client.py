@@ -132,7 +132,7 @@ class SoraClient(BaseAPIClient):
 
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
 
         try:
@@ -174,7 +174,7 @@ class SoraClient(BaseAPIClient):
 
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
 
         interval = self.POLL_INITIAL_INTERVAL
@@ -242,7 +242,7 @@ class SoraClient(BaseAPIClient):
 
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
 
         try:
@@ -299,7 +299,7 @@ class SoraClient(BaseAPIClient):
         """
 
         async def _run():
-            connector = aiohttp.TCPConnector(limit=0)
+            connector = aiohttp.TCPConnector(ssl=False, limit=0)
             async with aiohttp.ClientSession(connector=connector) as session:
                 # 1. 提交任务
                 if on_stage:
@@ -408,7 +408,7 @@ class SoraClient(BaseAPIClient):
             成功生成的视频路径列表
         """
         batch_size = len(save_paths)
-        connector = aiohttp.TCPConnector(limit=0)
+        connector = aiohttp.TCPConnector(ssl=False, limit=0)
 
         async with aiohttp.ClientSession(connector=connector) as session:
             tasks = [

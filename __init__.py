@@ -12,16 +12,15 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 # 检查更新（仅在启动时检查一次）
 try:
     from .utils.update_checker import check_for_updates, notify_update_available
-    
-    if check_for_updates():
-        notify_update_available()
+
+    notify_update_available()  # TODO: 测试用，改回 if check_for_updates(): notify_update_available()
 except Exception:
     # 静默失败，不影响插件加载
     pass
 
 import ssl
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, QuanNengShengTu, BatchQuanNengShengTu, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -55,8 +54,6 @@ def _wrap_generate_for_error_display(cls, attr="generate"):
 
 _wrap_generate_for_error_display(NanoBananaPro)
 _wrap_generate_for_error_display(BatchNanoBananaPro)
-_wrap_generate_for_error_display(QuanNengShengTu)
-_wrap_generate_for_error_display(BatchQuanNengShengTu, "process_batch")
 
 # ComfyUI 节点注册
 NODE_CLASS_MAPPINGS = {
@@ -74,12 +71,12 @@ NODE_CLASS_MAPPINGS = {
     "KlingVideo": KlingVideo,
     "KlingFirstLastFrame": KlingFirstLastFrame,
     "KlingMotionControlTest": KlingMotionControlTest,
-    "QuanNengShengTu": QuanNengShengTu,
-    "BatchQuanNengShengTu": BatchQuanNengShengTu,
     "AspectRatioPreset": AspectRatioPreset,
     "MultiResPreview": MultiResPreview,
     "BatchImagesO1key": BatchImagesO1key,
     "Seedance": Seedance,
+    "SeedanceMultiModal": SeedanceMultiModal,
+    "StreamPreview": StreamPreview,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -90,21 +87,35 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageStitchPro": "图像拼接 Pro",
     "SaveCleanImage": "保存图像（防AI识别）",
     "BatchCleanMetadata": "批量任务（防AI识别）",
-    "VideoPreview": "视频预览",
+    "VideoPreview": "预览视频",
     "GoogleVeo": "Google Veo - ab",
     "FluxImageEdit": "Flux2 图像编辑",
     "UniversalLLMChat": "全能LLM对话助手",
     "KlingVideo": "文/图生视频 自研模型",
     "KlingFirstLastFrame": "首尾帧生视频 自研模型",
     "KlingMotionControlTest": "动作控制 自研模型",
-    "QuanNengShengTu": "全能生图",
-    "BatchQuanNengShengTu": "全能生图（批量）",
     "AspectRatioPreset": "图片宽高比预设",
     "MultiResPreview": "预览图像（v2）",
     "BatchImagesO1key": "加载图像（批量）",
     "Seedance": "Seedance 视频生成",
+    "SeedanceMultiModal": "Seedance 多模态参考生视频",
+    "StreamPreview": "流式文本预览",
 }
 
 WEB_DIRECTORY = "./web"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
+
+# 注册 /o1key/input_dir 接口，供前端文件上传按钮获取 input 目录绝对路径
+try:
+    from aiohttp import web
+    from server import PromptServer
+    import folder_paths
+
+    @PromptServer.instance.routes.get("/o1key/input_dir")
+    async def get_input_dir(request):
+        import os
+        path = os.path.abspath(folder_paths.get_input_directory())
+        return web.json_response({"path": path})
+except Exception:
+    pass

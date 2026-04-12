@@ -73,6 +73,79 @@ def _tensor_to_base64_url(tensor) -> str:
     return f"data:image/png;base64,{b64}"
 
 
+def _video_to_base64_url(video) -> str:
+    """ComfyUI VIDEO 对象 → data:video/<ext>;base64,xxx"""
+    import base64
+    import io as _io
+
+    source = video.get_stream_source()
+
+    if isinstance(source, _io.BytesIO):
+        source.seek(0)
+        data = source.read()
+        ext = "mp4"
+    else:
+        video_path = source
+        if not video_path or not os.path.isfile(video_path):
+            raise ValueError(f"无法获取参考视频文件路径（当前路径：{video_path}）")
+        ext = os.path.splitext(video_path)[1].lower().lstrip(".")
+        if ext not in ("mp4", "mov"):
+            raise ValueError(f"参考视频格式须为 mp4 或 mov，当前为 .{ext}")
+        with open(video_path, "rb") as f:
+            data = f.read()
+
+    b64 = base64.b64encode(data).decode("utf-8")
+    return f"data:video/{ext};base64,{b64}"
+
+
+def _audio_to_base64_url(audio) -> str:
+    """ComfyUI AUDIO dict（waveform tensor + sample_rate）→ data:audio/wav;base64,xxx"""
+    import base64
+    import io
+    import struct
+    import numpy as np
+
+    waveform = audio["waveform"]   # shape: [B, C, N] or [C, N]
+    sample_rate = int(audio["sample_rate"])
+
+    # 统一为 [C, N]
+    if waveform.dim() == 3:
+        waveform = waveform[0]
+
+    # 转为 numpy float32，然后转 int16 PCM
+    wav_np = waveform.cpu().numpy()
+    if wav_np.ndim == 2:
+        # 多声道 → 单声道（取均值）
+        wav_np = wav_np.mean(axis=0)
+    wav_np = np.clip(wav_np, -1.0, 1.0)
+    pcm = (wav_np * 32767).astype(np.int16)
+
+    # 写 WAV 文件到内存
+    buf = io.BytesIO()
+    num_samples = len(pcm)
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = num_samples * block_align
+
+    # RIFF header
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + data_size))
+    buf.write(b"WAVE")
+    # fmt chunk
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<IHHIIHH", 16, 1, num_channels, sample_rate,
+                          byte_rate, block_align, bits_per_sample))
+    # data chunk
+    buf.write(b"data")
+    buf.write(struct.pack("<I", data_size))
+    buf.write(pcm.tobytes())
+
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:audio/wav;base64,{b64}"
+
+
 async def _url_to_tensor(url: str) -> torch.Tensor:
     """从 URL 下载图片并转为 ComfyUI IMAGE tensor，失败时返回 None"""
     try:
@@ -286,12 +359,201 @@ class Seedance:
             _show_balance()
 
 
+# ── 多模态参考生视频节点 ──────────────────────────────────────────────────────
+
+class SeedanceMultiModal:
+    """Seedance 2.0 多模态参考生视频（参考图片 + 参考视频 + 参考音频 + 文本）"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "提示词":           ("STRING", {"multiline": True, "default": ""}),
+                "模型":             (_MODELS, {"default": "doubao-seedance-2-0-260128"}),
+                "分辨率":           (_RESOLUTIONS, {"default": "720p"}),
+                "宽高比":           (["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
+                                     {"default": "adaptive"}),
+                "时长秒(-1=自动)":  ("INT", {"default": 5, "min": -1, "max": 15, "step": 1}),
+                "生成音频":         (["关闭", "打开"], {"default": "关闭"}),
+                "联网搜索":         (["关闭", "打开"], {"default": "关闭"}),
+                "返回末帧图片":     (["关闭", "打开"], {"default": "关闭"}),
+                "seed":             ("INT", {"default": 0, "min": 0, "max": 0xffffffff}),
+            },
+            "optional": {
+                "参考图片":         ("IMAGE",),
+                "参考视频1":        ("VIDEO",),
+                "参考视频2":        ("VIDEO",),
+                "参考视频3":        ("VIDEO",),
+                "参考音频1":        ("AUDIO",),
+                "参考音频2":        ("AUDIO",),
+                "参考音频3":        ("AUDIO",),
+            },
+        }
+
+    RETURN_TYPES = ("VIDEO", "IMAGE")
+    RETURN_NAMES = ("视频", "末帧图片")
+    FUNCTION = "generate"
+    CATEGORY = "comfyui_o1key/Seedance"
+    INPUT_IS_LIST = True
+
+    async def generate(self, **kwargs):
+        # INPUT_IS_LIST=True 时所有参数都是列表，取第一个元素
+        def _first(v, default=None):
+            if isinstance(v, list):
+                return v[0] if v else default
+            return v if v is not None else default
+
+        prompt      = _first(kwargs.get("提示词"), "").strip()
+        model       = _first(kwargs.get("模型"))
+        resolution  = _first(kwargs.get("分辨率"))
+        ratio       = _first(kwargs.get("宽高比"))
+        duration    = _first(kwargs.get("时长秒(-1=自动)"), 5)
+        gen_audio   = _first(kwargs.get("生成音频"), "关闭") == "打开"
+        web_search  = _first(kwargs.get("联网搜索"), "关闭") == "打开"
+        return_last = _first(kwargs.get("返回末帧图片"), "关闭") == "打开"
+        seed        = _first(kwargs.get("seed"), 0)
+
+        # 参考图片：INPUT_IS_LIST 时是 [tensor, tensor, ...] 列表，直接保留
+        raw_images = kwargs.get("参考图片", None)
+        ref_images = [img for img in raw_images if img is not None] if raw_images else None
+
+        ref_videos  = [_first(kwargs.get(f"参考视频{i}")) for i in range(1, 4)]
+        ref_audios  = [_first(kwargs.get(f"参考音频{i}")) for i in range(1, 4)]
+
+        ref_videos  = [v for v in ref_videos if v is not None]
+        ref_audios  = [a for a in ref_audios if a is not None]
+
+        # ── 校验 ──────────────────────────────────────────────────────────
+        has_image = bool(ref_images)
+        has_video = len(ref_videos) > 0
+        has_audio = len(ref_audios) > 0
+
+        if not has_image and not has_video and not has_audio and not prompt:
+            raise ValueError("至少需要提供参考图片、参考视频或提示词之一。")
+        if has_audio and not has_image and not has_video:
+            raise ValueError("不可单独输入音频，请至少连接一张参考图片或一个参考视频。")
+
+        # ── 构建 content 列表 ─────────────────────────────────────────────
+        content = []
+
+        # 参考图片（批次，最多9张）
+        if has_image:
+            imgs = ref_images[:9]
+            if len(ref_images) > 9:
+                print(f"[SeedanceMultiModal] 参考图片超过9张，仅取前9张（共{len(ref_images)}张）")
+            for img_tensor in imgs:
+                # 每个 tensor 可能是 [1,H,W,C] 或 [H,W,C]，统一确保有 batch 维
+                if img_tensor.dim() == 3:
+                    img_tensor = img_tensor.unsqueeze(0)
+                url = _tensor_to_base64_url(img_tensor)
+                content.append({
+                    "type":      "image_url",
+                    "image_url": {"url": url},
+                    "role":      "reference_image",
+                })
+
+        # 参考视频（最多3个）
+        for v in ref_videos:
+            url = _video_to_base64_url(v)
+            content.append({
+                "type":      "video_url",
+                "video_url": {"url": url},
+                "role":      "reference_video",
+            })
+
+        # 参考音频（最多3段）
+        for a in ref_audios:
+            url = _audio_to_base64_url(a)
+            content.append({
+                "type":      "audio_url",
+                "audio_url": {"url": url},
+                "role":      "reference_audio",
+            })
+
+        # 文本提示词（放最后）
+        if prompt:
+            content.append({"type": "text", "text": prompt})
+
+        if not content:
+            raise ValueError("content 为空，请至少提供参考图片、参考视频或提示词。")
+
+        # ── 构建请求体（new-api 兼容格式）──────────────────────────────────
+        metadata: dict = {
+            "resolution": resolution,
+            "watermark":  False,
+            "content":    content,
+        }
+
+        if ratio != "adaptive":
+            metadata["ratio"] = ratio
+        if duration != -1:
+            metadata["duration"] = duration
+        if gen_audio:
+            metadata["generate_audio"] = True
+        if return_last:
+            metadata["return_last_frame"] = True
+        if seed != 0:
+            metadata["seed"] = seed
+        if web_search:
+            metadata["tools"] = [{"type": "web_search"}]
+
+        # 顶层 image：取第一张参考图的 base64（new-api 单图字段）
+        first_image_url = next(
+            (item["image_url"]["url"] for item in content if item["type"] == "image_url"),
+            None,
+        )
+
+        body = {
+            "model":    model,
+            "prompt":   prompt if prompt else " ",
+            "metadata": metadata,
+        }
+        if first_image_url:
+            body["image"] = first_image_url
+
+        # ── 打印请求体结构（base64 截断显示）────────────────────────────────
+        import json as _json, copy as _copy
+        def _truncate_body(obj):
+            if isinstance(obj, dict):
+                return {k: _truncate_body(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_truncate_body(i) for i in obj]
+            if isinstance(obj, str) and obj.startswith("data:") and len(obj) > 80:
+                return obj[:60] + f"...[{len(obj)}chars]"
+            return obj
+        print("[SeedanceMultiModal] 请求体预览:")
+        print(_json.dumps(_truncate_body(_copy.deepcopy(body)), ensure_ascii=False, indent=2))
+
+        # ── 保存路径 ──────────────────────────────────────────────────────
+        video_dir = _get_video_output_dir()
+        counter   = _get_next_counter(video_dir, "seedance_mm")
+        save_path = os.path.join(video_dir, f"seedance_mm_{counter:05d}.mp4")
+
+        client            = SeedanceClient()
+        pbar              = _make_pbar()
+        on_stage, on_prog = _make_callbacks("Seedance多模态", pbar)
+
+        try:
+            result_path, last_frame_url = await client.generate_async(
+                body=body, save_path=save_path,
+                on_stage=on_stage, on_progress=on_prog,
+            )
+            last_frame_tensor = None
+            if return_last and last_frame_url:
+                last_frame_tensor = await _url_to_tensor(last_frame_url)
+            return (InputImpl.VideoFromFile(result_path), last_frame_tensor)
+        finally:
+            _show_balance()
+
+
 # ── 节点注册 ──────────────────────────────────────────────────────────────────
 
 NODE_CLASS_MAPPINGS = {
-    "Seedance": Seedance,
+    "Seedance":          Seedance,
+    "SeedanceMultiModal": SeedanceMultiModal,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Seedance": "Seedance 视频生成",
+    "Seedance":          "Seedance 视频生成",
+    "SeedanceMultiModal": "Seedance 多模态参考生视频",
 }

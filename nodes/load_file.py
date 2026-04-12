@@ -1,146 +1,125 @@
 """
-LoadFile 节点
-ComfyUI 自定义节点,用于加载文件并转换为 FILE 类型数据
+LoadFile 节点（增强版）
+支持单文件路径和文件夹路径，输出 FILE_LIST 类型供全能LLM等节点使用
 """
 
 import base64
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, List
 
-from ..utils.file_types import FileData, DOCUMENT_MIME_TYPES, FILE_SIZE_LIMITS
+from ..utils.file_types import FileData, FileList, DOCUMENT_MIME_TYPES, FILE_SIZE_LIMIT, TOTAL_FILE_SIZE_LIMIT
 
 
 class LoadFile:
     """
-    LoadFile 节点
-    
-    功能：
-    - 从文件系统加载文件
-    - 支持 PDF 和 TXT 文件
-    - 转换为 FILE 类型数据（包含 base64 编码内容）
-    - 验证文件大小和格式
+    加载文件节点
+
+    - 单文件路径：加载指定文件
+    - 文件夹路径：加载文件夹内所有支持的文件（非递归）
+    - 两者可同时使用，结果合并输出
+    - 输出 FILE_LIST 类型，可直接连接到全能LLM对话助手
     """
-    
+
     @classmethod
     def INPUT_TYPES(cls):
-        """
-        定义输入参数
-        """
         return {
-            "required": {
-                "文件路径": ("STRING", {
+            "required": {},
+            "optional": {
+                "单文件路径": ("STRING", {
                     "default": "",
-                    "multiline": False
-                })
-            }
+                    "multiline": False,
+                    "placeholder": "文件完整路径，多个文件用英文逗号分隔",
+                }),
+                "文件夹路径": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "placeholder": "文件夹路径，自动读取其中所有支持的文件",
+                }),
+            },
         }
-    
-    # 返回值类型
-    RETURN_TYPES = ("FILE", "STRING")
-    RETURN_NAMES = ("文件", "文件信息")
-    
-    # 执行函数名
+
+    RETURN_TYPES = ("FILE_LIST", "STRING")
+    RETURN_NAMES = ("文件列表", "文件信息")
     FUNCTION = "load_file"
-    
-    # 节点分类
     CATEGORY = "file/input"
-    
-    def load_file(self, 文件路径: str) -> Tuple[FileData, str]:
-        """
-        加载文件并转换为 FILE 类型
-        
-        Args:
-            文件路径: 文件的完整路径（支持绝对路径和相对路径）
-        
-        Returns:
-            (FileData, 文件信息预览)
-        
-        Raises:
-            ValueError: 文件不存在、不支持的文件类型或文件过大
-        """
-        try:
-            # 清理路径（去除空格和引号）
-            file_path = 文件路径.strip().strip('"').strip("'")
-            
-            if not file_path:
-                raise ValueError("文件路径不能为空")
-            
-            # 转换为 Path 对象
-            path = Path(file_path)
-            
-            # 如果是相对路径，转换为绝对路径
-            if not path.is_absolute():
-                # 相对于当前工作目录
-                path = Path.cwd() / path
-            
-            # 验证文件是否存在
-            if not path.exists():
-                raise ValueError(f"文件不存在: {file_path}")
-            
-            if not path.is_file():
-                raise ValueError(f"路径不是文件: {file_path}")
-            
-            # 获取文件信息
-            extension = path.suffix.lower()
-            filename = path.stem
-            file_size = path.stat().st_size
-            
-            # 验证文件类型
-            if extension not in DOCUMENT_MIME_TYPES:
-                supported_types = ", ".join(DOCUMENT_MIME_TYPES.keys())
+
+    def load_file(self, 单文件路径: str = "", 文件夹路径: str = "") -> Tuple[FileList, str]:
+        collected: List[Path] = []
+
+        # 1. 单文件路径（逗号分隔，支持多个）
+        if 单文件路径.strip():
+            for raw in 单文件路径.split(","):
+                p = Path(raw.strip().strip('"').strip("'"))
+                if not p.is_absolute():
+                    p = Path.cwd() / p
+                if not p.exists():
+                    raise ValueError(f"文件不存在: {p}")
+                if not p.is_file():
+                    raise ValueError(f"路径不是文件: {p}")
+                collected.append(p)
+
+        # 2. 文件夹路径
+        if 文件夹路径.strip():
+            folder = Path(文件夹路径.strip().strip('"').strip("'"))
+            if not folder.is_absolute():
+                folder = Path.cwd() / folder
+            if not folder.exists():
+                raise ValueError(f"文件夹不存在: {folder}")
+            if not folder.is_dir():
+                raise ValueError(f"路径不是文件夹: {folder}")
+            for p in sorted(folder.iterdir()):
+                if p.is_file() and p.suffix.lower() in DOCUMENT_MIME_TYPES:
+                    collected.append(p)
+            if not collected:
+                raise ValueError(f"文件夹中没有支持的文件: {folder}")
+
+        if not collected:
+            raise ValueError("请至少提供一个文件路径或文件夹路径")
+
+        # 去重（保持顺序）
+        seen = set()
+        unique: List[Path] = []
+        for p in collected:
+            key = str(p.resolve())
+            if key not in seen:
+                seen.add(key)
+                unique.append(p)
+
+        # 大小检查 & 读取
+        total_size = 0
+        file_list: FileList = []
+        info_lines = []
+
+        for p in unique:
+            ext = p.suffix.lower()
+            if ext not in DOCUMENT_MIME_TYPES:
+                print(f"LoadFile: 跳过不支持的文件类型 {p.name}")
+                continue
+
+            file_size = p.stat().st_size
+            if file_size > FILE_SIZE_LIMIT:
                 raise ValueError(
-                    f"不支持的文件类型: {extension}\n"
-                    f"支持的类型: {supported_types}"
+                    f"文件 {p.name} 大小 {file_size / 1024 / 1024:.1f}MB 超过单文件 50MB 限制"
                 )
-            
-            # 获取 MIME 类型
-            mime_type = DOCUMENT_MIME_TYPES[extension]
-            
-            # 验证文件大小
-            size_limit = FILE_SIZE_LIMITS.get(extension, 20 * 1024 * 1024)
-            if file_size > size_limit:
-                raise ValueError(
-                    f"文件过大 ({file_size / 1024 / 1024:.2f}MB)，"
-                    f"最大支持 {size_limit / 1024 / 1024:.0f}MB"
-                )
-            
-            # 读取文件并转换为 base64
-            print(f"LoadFile: 正在加载文件 {filename}{extension}")
-            print(f"LoadFile: 文件大小 = {file_size / 1024:.2f}KB")
-            
-            with open(path, "rb") as f:
-                file_bytes = f.read()
-            
-            # Base64 编码
-            b64_str = base64.b64encode(file_bytes).decode("utf-8")
-            
-            # 创建 FileData 对象
-            file_data = FileData(
-                path=str(path),
-                filename=filename,
-                extension=extension,
-                mime_type=mime_type,
-                data=b64_str,
-                size=file_size
-            )
-            
-            # 生成文件信息预览
-            file_info = (
-                f"文件名: {filename}{extension}\n"
-                f"类型: {mime_type}\n"
-                f"大小: {file_size / 1024:.2f}KB\n"
-                f"路径: {path}"
-            )
-            
-            print(f"LoadFile: 加载成功")
-            
-            return (file_data, file_info)
-        
-        except ValueError as e:
-            print(f"LoadFile: 输入错误 - {str(e)}")
-            raise
-        
-        except Exception as e:
-            print(f"LoadFile: 未知错误 - {str(e)}")
-            raise
+            total_size += file_size
+            if total_size > TOTAL_FILE_SIZE_LIMIT:
+                raise ValueError(f"所有文件总大小超过 50MB 限制")
+
+            mime = DOCUMENT_MIME_TYPES[ext]
+            with open(p, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            file_list.append(FileData(
+                path=str(p),
+                filename=p.stem,
+                extension=ext,
+                mime_type=mime,
+                data=b64,
+                size=file_size,
+            ))
+            info_lines.append(f"  {p.name} ({file_size / 1024:.1f}KB, {mime})")
+            print(f"LoadFile: 加载 {p.name} ({file_size / 1024:.1f}KB)")
+
+        info = f"共 {len(file_list)} 个文件，总大小 {total_size / 1024:.1f}KB\n" + "\n".join(info_lines)
+        return (file_list, info)

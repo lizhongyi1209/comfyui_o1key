@@ -137,7 +137,7 @@ class KlingClient:
         on_progress: Optional[Callable[[int], None]] = None,
     ) -> str:
         """提交 → 轮询 → 下载，返回本地文件路径"""
-        connector = aiohttp.TCPConnector(force_close=True)
+        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
             if on_stage:
                 on_stage("submitting")
@@ -196,7 +196,7 @@ class KlingClient:
                    "Content-Type": "application/json"}
         interval = self.POLL_INITIAL_INTERVAL
 
-        connector = aiohttp.TCPConnector(force_close=True)
+        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
 
             # 1. 提交

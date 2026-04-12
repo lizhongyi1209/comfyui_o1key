@@ -79,6 +79,15 @@ class BaseAPIClient(ABC):
         """
         pass
     
+    def _make_session(self) -> aiohttp.ClientSession:
+        """
+        创建统一的 aiohttp ClientSession，全局禁用 SSL 验证。
+        所有需要独立创建 session 的地方都应调用此方法，
+        避免因客户端系统缺少根证书导致 SSLCertVerificationError。
+        """
+        connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
+        return aiohttp.ClientSession(connector=connector)
+
     def get_headers(self, use_bearer_token: bool = False) -> Dict[str, str]:
         """
         获取请求头
@@ -142,67 +151,132 @@ class BaseAPIClient(ABC):
     ) -> Dict[str, Any]:
         """
         发送异步 HTTP 请求（带详细计时）
-        
+
         Args:
             endpoint: API 端点
             request_body: 请求体
             session: aiohttp 会话（可选）
             use_bearer_token: 是否使用 Bearer Token 认证
-            timeout: 超时时间（秒）- 已废弃，由服务器端控制
-        
+            timeout: 超时时间（秒），默认 900 秒
+
         Returns:
             响应 JSON
-        
+
         Raises:
             RuntimeError: 请求失败时
+            InterruptProcessingException: 用户点击终止按钮时
         """
         import time
-        
+
+        # 尝试导入 ComfyUI 中断机制
+        try:
+            from comfy.model_management import processing_interrupted, InterruptProcessingException
+            _interrupt_available = True
+        except ImportError:
+            _interrupt_available = False
+
         url = f"{self.base_url}{endpoint}"
         headers = self.get_headers(use_bearer_token)
-        
+
         # 检查请求大小
         self.check_request_size(request_body)
-        
+
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
-        
-        try:
-            # 连接计时
+
+        # 设置请求超时：连接超时 30s，读取超时 900s（防止服务器出图后卡住）
+        _timeout_seconds = timeout if timeout is not None else 900
+        _aiohttp_timeout = aiohttp.ClientTimeout(
+            total=_timeout_seconds,
+            connect=30,
+            sock_read=_timeout_seconds
+        )
+
+        async def _do_request():
             connect_start = time.time()
-            
-            async with session.post(url, json=request_body, headers=headers) as response:
+            async with session.post(url, json=request_body, headers=headers, timeout=_aiohttp_timeout) as response:
                 connect_time = time.time() - connect_start
-                
+
                 if response.status != 200:
                     error_text = await response.text()
                     raise RuntimeError(error_text)
-                
-                # 接收响应体
+
                 wait_start = time.time()
                 response_data = await response.json()
                 download_time = time.time() - wait_start
-                
-                # 附加计时信息到响应数据（供上层使用）
+
                 response_size = len(str(response_data))
                 if not isinstance(response_data, dict):
                     response_data = {"data": response_data}
-                
-                # 将计时信息存储在响应的元数据中
+
                 response_data["_timing"] = {
                     "connect_time": connect_time,
                     "download_time": download_time,
                     "response_size": response_size
                 }
-                
                 return response_data
-        
+
+        async def _poll_interrupt():
+            """每 0.5s 轮询一次中断标志"""
+            while True:
+                await asyncio.sleep(0.5)
+                if processing_interrupted():
+                    return
+
+        try:
+            if _interrupt_available:
+                request_task = asyncio.ensure_future(_do_request())
+                interrupt_task = asyncio.ensure_future(_poll_interrupt())
+
+                done, pending = await asyncio.wait(
+                    [request_task, interrupt_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                # 取消未完成的任务
+                for t in pending:
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                # 判断是哪个先完成
+                if interrupt_task in done and request_task not in done:
+                    raise InterruptProcessingException()
+
+                # 请求完成，取出结果（可能含异常）
+                return request_task.result()
+            else:
+                return await _do_request()
+
+        except InterruptProcessingException:
+            raise
+
+        except aiohttp.ServerTimeoutError as e:
+            raise RuntimeError(
+                f"请求超时！等待服务器响应超过 {_timeout_seconds} 秒。\n"
+                f"服务器可能仍在生成图片，请稍后重试，或检查网络连接。"
+            ) from e
+
+        except aiohttp.ClientConnectorError as e:
+            raise RuntimeError(
+                f"无法连接到服务器：{str(e)}\n"
+                f"请检查网络连接是否正常。"
+            ) from e
+
+        except asyncio.TimeoutError as e:
+            raise RuntimeError(
+                f"请求超时！等待服务器响应超过 {_timeout_seconds} 秒。\n"
+                f"服务器可能仍在生成图片，请稍后重试，或检查网络连接。"
+            ) from e
+
         finally:
             if close_session:
                 await session.close()
-    
+
     async def request_get_async(
         self,
         endpoint: str,
@@ -230,9 +304,9 @@ class BaseAPIClient(ABC):
         
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
-        
+
         try:
             async with session.get(url, headers=headers) as response:
                 if response.status != 200:
@@ -327,9 +401,7 @@ class BaseAPIClient(ABC):
         total = len(requests)
         
         # 创建无限制的连接器
-        connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
-        
-        async with aiohttp.ClientSession(connector=connector) as session:
+        async with self._make_session() as session:
             tasks = []
             
             for req in requests:

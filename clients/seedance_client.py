@@ -169,7 +169,7 @@ class SeedanceClient:
         on_progress: Optional[Callable[[int], None]] = None,
     ) -> tuple:
         """提交 → 轮询 → 下载，返回 (本地视频路径, 末帧图片URL或None)"""
-        connector = aiohttp.TCPConnector(force_close=True)
+        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
 
             # 提交

@@ -1,7 +1,3 @@
-# .config 文件包含敏感信息，不提交到版本控制
-# 用户可通过 setup_api_key.bat 自动创建本地配置
-.config
-
 # Python 缓存
 __pycache__/
 *.py[cod]

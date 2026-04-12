@@ -236,18 +236,6 @@ class BatchNanoBananaPro:
                 "分辨率": (all_resolutions, {
                     "default": "2K"
                 }),
-                "像素缩放": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "打开",
-                    "label_off": "关闭"
-                }),
-                "分辨率像素": ("FLOAT", {
-                    "default": 1.0,
-                    "min": 0.1,
-                    "max": 100.0,
-                    "step": 0.1,
-                    "display": "number"
-                }),
                 "谷歌搜索（联网）": (["关闭", "打开"], {
                     "default": "关闭"
                 }),
@@ -298,11 +286,6 @@ class BatchNanoBananaPro:
                 "保存路径": ("STRING", {
                     "default": "",
                     "multiline": False
-                }),
-                "跳过错误": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "打开",
-                    "label_off": "关闭"
                 })
             },
             "optional": optional_inputs
@@ -324,8 +307,6 @@ class BatchNanoBananaPro:
         folder2: Optional[str],
         folder3: Optional[str],
         folder4: Optional[str],
-        enable_scaling: bool,
-        target_megapixels: float,
         folder5: Optional[str] = None,
         folder6: Optional[str] = None,
         folder7: Optional[str] = None,
@@ -334,48 +315,25 @@ class BatchNanoBananaPro:
     ) -> List[List[ImageInfo]]:
         """
         加载所有文件夹中的图片
-        
+
         Args:
             folder1-9: 文件夹路径
-            enable_scaling: 是否启用像素缩放
-            target_megapixels: 目标像素数（百万像素）
-        
+
         Returns:
             图片列表的列表
         """
         folders = [folder1, folder2, folder3, folder4, folder5, folder6, folder7, folder8, folder9]
         all_images = []
-        
+
         for i, folder in enumerate(folders, 1):
             if folder and folder.strip():
                 try:
                     images = load_images_from_folder(folder)
                     if images:
-                        # 应用像素缩放
-                        if enable_scaling:
-                            scaled_images = []
-                            for img_info in images:
-                                scaled_img = self.resize_to_megapixels(
-                                    img_info.image,
-                                    target_megapixels
-                                )
-                                # 创建新的 ImageInfo，保留其他元数据
-                                scaled_info = ImageInfo(
-                                    image=scaled_img,
-                                    filename=img_info.filename,
-                                    extension=img_info.extension,
-                                    source_path=img_info.source_path
-                                )
-                                scaled_images.append(scaled_info)
-                            images = scaled_images
-                        
                         all_images.append(images)
-                    else:
-                        # 空文件夹，静默跳过
-                        pass
                 except ValueError as e:
                     print(f"BatchNanoBananaPro: 文件夹{i} 加载失败 - {e}")
-        
+
         return all_images
     
     def _create_pairs(
@@ -596,8 +554,7 @@ class BatchNanoBananaPro:
         
         total_tasks = len(pairs)
         
-        # 保持并发数为10不变（按用户要求）
-        max_concurrent = 10
+        max_concurrent = 50
         
         # 分批保存的批次大小（与并发数一致）
         save_batch_size = 10
@@ -627,7 +584,7 @@ class BatchNanoBananaPro:
         if num_batches > 1:
             print(f"BatchNanoBananaPro: 任务数 {total_tasks} 超过并发上限 {max_concurrent}，将分 {num_batches} 批执行")
         
-        connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
+        connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
         
         async with aiohttp.ClientSession(connector=connector) as session:
             # 分批处理：每批最多10个任务
@@ -761,14 +718,11 @@ class BatchNanoBananaPro:
         文件夹7: str,
         文件夹8: str,
         文件夹9: str,
-        像素缩放: bool,
-        分辨率像素: float,
         seed: int,
         图片配对模式: str,
         模型: str,
         宽高比: str,
         分辨率: str,
-        跳过错误: bool = False,
         保存路径: str = "",
         **kwargs
     ) -> Tuple[torch.Tensor]:
@@ -778,8 +732,6 @@ class BatchNanoBananaPro:
         Args:
             prompt: 提示词
             文件夹1-9: 图片文件夹路径
-            像素缩放: 是否启用像素缩放
-            分辨率像素: 目标像素数（百万像素）
             seed: 随机种子
             保存路径: 输出保存路径
             图片配对模式: 1:1 或 1*N
@@ -840,7 +792,6 @@ class BatchNanoBananaPro:
             print("BatchNanoBananaPro: 开始加载图片...")
             image_lists = self._load_folders(
                 文件夹1, 文件夹2, 文件夹3, 文件夹4,
-                像素缩放, 分辨率像素,
                 文件夹5, 文件夹6, 文件夹7, 文件夹8, 文件夹9
             )
             
@@ -856,10 +807,6 @@ class BatchNanoBananaPro:
                 if key in kwargs and kwargs[key] is not None:
                     pil_images = tensor_to_pil(kwargs[key])
                     for j, img in enumerate(pil_images):
-                        # 如果启用像素缩放，也对参考图进行缩放
-                        if 像素缩放:
-                            img = self.resize_to_megapixels(img, 分辨率像素)
-                        
                         manual_images.append(
                             ImageInfo(
                                 image=img,
@@ -976,9 +923,9 @@ class BatchNanoBananaPro:
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(run_async_in_thread)
                 try:
-                    results = future.result(timeout=3600)  # 1小时超时
+                    results = future.result(timeout=900)  # 900秒超时
                 except TimeoutError:
-                    print("BatchNanoBananaPro: 任务执行超时（1小时）")
+                    print("BatchNanoBananaPro: 任务执行超时（900秒）")
                     raise RuntimeError("任务执行超时，请减少任务数量或检查网络连接")
                 except Exception as e:
                     # 即使失败，也尝试返回部分结果
@@ -1078,24 +1025,12 @@ class BatchNanoBananaPro:
             if str(e) == "未授权！":
                 print("请联系作者授权后方可使用！")
                 raise ValueError("未授权！") from None
-            if 跳过错误:
-                print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
-                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
-                return (pil_to_tensor([placeholder]),)
             raise ValueError(str(e)) from None
 
         except RuntimeError as e:
-            if 跳过错误:
-                print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
-                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
-                return (pil_to_tensor([placeholder]),)
             raise RuntimeError(str(e)) from None
 
         except Exception as e:
-            if 跳过错误:
-                print("BatchNanoBananaPro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
-                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
-                return (pil_to_tensor([placeholder]),)
             raise type(e)(str(e)) from None
         
         finally:

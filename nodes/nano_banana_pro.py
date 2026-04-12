@@ -52,7 +52,7 @@ except ImportError:
 # ============================================================================
 # 是否启用调试日志（打印完整的 API 响应内容）
 # 设置为 True 以启用调试日志，False 以禁用
-DEBUG_LOG_ENABLED = False
+DEBUG_LOG_ENABLED = True
 # 是否启用请求体日志（打印发送给 API 的请求体，base64 图片数据将自动截断）
 # 设置为 True 以启用请求体日志，False 以禁用
 REQUEST_LOG_ENABLED = False
@@ -177,18 +177,6 @@ class NanoBananaPro:
                     "max": 1000,
                     "step": 1
                 }),
-                "像素缩放": ("BOOLEAN", {
-                    "default": True,
-                    "label_on": "打开",
-                    "label_off": "关闭"
-                }),
-                "分辨率像素": ("FLOAT", {
-                    "default": 1.0,
-                    "min": 0.1,
-                    "max": 100.0,
-                    "step": 0.1,
-                    "display": "number"
-                }),
                 "谷歌搜索（联网）": (["关闭", "打开"], {
                     "default": "关闭"
                 }),
@@ -199,11 +187,6 @@ class NanoBananaPro:
                     "default": 0,
                     "min": 0,
                     "max": 0xffffffffffffffff
-                }),
-                "跳过错误": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "打开",
-                    "label_off": "关闭"
                 })
             },
             "optional": optional_inputs
@@ -309,14 +292,16 @@ class NanoBananaPro:
         global_task_index: int,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
+        save_to_disk: bool = True,
     ) -> dict:
-        """执行单个生成任务，生成后立即保存到磁盘"""
+        """执行单个生成任务"""
         result = {
             "global_task_index": global_task_index,
             "prompt": prompt,
             "success": False,
             "generated_count": 0,
             "saved_files": [],
+            "output_images": [],
             "error": None
         }
 
@@ -335,20 +320,23 @@ class NanoBananaPro:
             )
             if gen_result:
                 images_list, _ = gen_result
-                for gen_img in images_list:
-                    output_path = generate_timestamp_filename(
-                        output_folder=output_folder,
-                        extension=".png"
-                    )
-                    save_image(gen_img, output_path)
-                    result["saved_files"].append(output_path)
-                    gen_img = None  # 释放内存
-                
+                if save_to_disk:
+                    for gen_img in images_list:
+                        output_path = generate_timestamp_filename(
+                            output_folder=output_folder,
+                            extension=".png"
+                        )
+                        save_image(gen_img, output_path)
+                        result["saved_files"].append(output_path)
+                        gen_img = None
+                else:
+                    result["output_images"] = images_list
+
                 result["success"] = True
                 result["generated_count"] = len(images_list)
         except Exception as e:
             result["error"] = str(e)
-        
+
         return result
     
     async def _process_batch_async(
@@ -363,8 +351,9 @@ class NanoBananaPro:
         pbar=None,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
+        save_to_disk: bool = True,
     ) -> List[dict]:
-        """异步批量处理：每个提示词独立调用 API，生成后立即写磁盘"""
+        """异步批量处理：每个提示词独立调用 API"""
         # 构建任务列表：(prompt, sub_index) 用于 images_per_prompt > 1 的情况
         tasks_def = []
         for p_idx, prompt in enumerate(prompts):
@@ -373,9 +362,8 @@ class NanoBananaPro:
         
         total_tasks = len(tasks_def)
         num_prompts = len(prompts)
-        print(f"Nano Banana Pro: 批量提示词模式 | {num_prompts}个提示词 × {images_per_prompt}张/提示词 | 共{total_tasks}任务")
-        
-        max_concurrent = 10
+
+        max_concurrent = 50
         num_batches = math.ceil(total_tasks / max_concurrent)
         
         all_results = []
@@ -383,7 +371,7 @@ class NanoBananaPro:
         success_count = 0
         fail_count = 0
         
-        connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
+        connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
         
         async with aiohttp.ClientSession(connector=connector) as session:
             for batch_idx in range(num_batches):
@@ -405,6 +393,7 @@ class NanoBananaPro:
                             global_task_index=i,
                             enable_grounding=enable_grounding,
                             enable_image_search=enable_image_search,
+                            save_to_disk=save_to_disk,
                         )
                     )
                     tasks.append(task)
@@ -454,23 +443,18 @@ class NanoBananaPro:
         宽高比: str,
         分辨率: str,
         生图数量: int,
-        像素缩放: bool,
-        分辨率像素: float,
         seed: int,
-        跳过错误: bool = False,
         **kwargs
     ) -> Tuple[torch.Tensor]:
         """
         生成图像
-        
+
         Args:
             prompt: 提示词
             模型: 模型名称
             宽高比: 宽高比
             分辨率: 分辨率
             生图数量: 批次大小
-            像素缩放: 是否启用像素缩放
-            分辨率像素: 目标像素数（百万像素）
             seed: 随机种子
             **kwargs: 搜索开关（谷歌搜索（联网）/ 图片搜索（联网））及动态参考图输入 (参考图1-9)
                       注：两个搜索参数名含全角括号，不能作为 Python 形参，从 kwargs 中提取
@@ -550,15 +534,7 @@ class NanoBananaPro:
                     raise ValueError(
                         f"输入图像数量 {len(input_images)} 超过限制 14 张，请减少输入图像数量"
                     )
-            
-            # 应用像素缩放（如果启用）
-            if input_images and 像素缩放:
-                scaled_images = []
-                for img in input_images:
-                    scaled = self.resize_to_megapixels(img, 分辨率像素)
-                    scaled_images.append(scaled)
-                input_images = scaled_images
-            
+
             # 解析批量提示词
             batch_prompts = parse_batch_prompts(prompt)
             
@@ -602,14 +578,13 @@ class NanoBananaPro:
                 nonlocal success_count, fail_count
                 if success:
                     success_count += 1
-                    print(f"Nano Banana Pro: 任务 {current}/{total} 成功 ✓")
                 else:
                     fail_count += 1
-                
+
                 # 更新 ComfyUI 原生进度条
                 if pbar is not None:
                     pbar.update(1)
-                
+
                 # 内存监控（每完成10个任务检查一次）
                 if MEMORY_MONITOR_AVAILABLE and total > 50 and current % 10 == 0:
                     import gc
@@ -627,21 +602,10 @@ class NanoBananaPro:
                 num_prompts = len(batch_prompts)
                 total_images = num_prompts * 生图数量
                 
-                # ===== 批量提示词模式：异步并发+磁盘保存 =====
+                # ===== 批量提示词模式：异步并发，内存输出 =====
                 if pbar is not None:
                     pbar = ProgressBar(total_images)
-                
-                # 确定保存路径
-                output_folder = ""
-                if FOLDER_PATHS_AVAILABLE:
-                    output_folder = folder_paths.get_output_directory()
-                    print(f"Nano Banana Pro: 磁盘保存模式 → {output_folder}")
-                else:
-                    raise ValueError("无法获取 ComfyUI output 目录，请检查 folder_paths 是否可用")
-                
-                import os
-                os.makedirs(output_folder, exist_ok=True)
-                
+
                 def run_async_in_thread():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
@@ -654,10 +618,11 @@ class NanoBananaPro:
                                 aspect_ratio=宽高比,
                                 images_per_prompt=生图数量,
                                 input_images=input_images,
-                                output_folder=output_folder,
+                                output_folder="",
                                 pbar=pbar,
                                 enable_grounding=enable_grounding,
                                 enable_image_search=enable_image_search,
+                                save_to_disk=False,
                             )
                         )
                     finally:
@@ -666,23 +631,20 @@ class NanoBananaPro:
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(run_async_in_thread)
                     try:
-                        results = future.result(timeout=3600)
+                        results = future.result(timeout=900)
                     except TimeoutError:
-                        raise RuntimeError("任务执行超时（1小时），请减少提示词数量或检查网络连接")
-                
+                        raise RuntimeError("任务执行超时（900秒），请减少提示词数量或检查网络连接")
+
                 # 统计结果
                 success_count = sum(1 for r in results if r.get("success", False))
                 fail_count = len(results) - success_count
                 total_generated = sum(r.get("generated_count", 0) for r in results)
-                all_saved_files = []
-                for r in results:
-                    all_saved_files.extend(r.get("saved_files", []))
-                
+
                 elapsed = time.time() - start_time
                 time_str = f"{elapsed:.3f}s" if elapsed < 1 else f"{elapsed:.2f}s"
-                
+
                 print(f"完成！总耗时 {time_str} | 成功: {success_count}/{total_images} | 失败: {fail_count}")
-                
+
                 # 失败详情
                 failed_results = [r for r in results if not r.get("success", False)]
                 if failed_results:
@@ -691,24 +653,17 @@ class NanoBananaPro:
                         prompt_snippet = (fr.get("prompt", "") or "")[:30]
                         error_msg = fr.get("error", "未知错误")
                         print(f"  失败 #{idx}: {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} → {error_msg}")
-                
-                # 从磁盘加载最后 10 张图片
+
+                # 收集内存中的图像
                 output_images = []
-                max_output_images = 10
-                recent_files = all_saved_files[-min(max_output_images, len(all_saved_files)):]
-                for file_path in recent_files:
-                    try:
-                        img = Image.open(file_path)
-                        output_images.append(img)
-                    except Exception as e:
-                        print(f"Nano Banana Pro: 无法加载 {file_path} - {e}")
-                
+                for r in results:
+                    output_images.extend(r.get("output_images", []))
+
                 if not output_images:
                     placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
                     output_images = [placeholder]
                 
                 output_tensor = _images_to_tensor_safe(output_images, _NODE)
-                print(f"Nano Banana Pro: 共保存 {len(all_saved_files)} 张图片到磁盘，节点输出最后 {len(output_images)} 张")
 
                 import gc
                 gc.collect()
@@ -716,7 +671,7 @@ class NanoBananaPro:
             else:
                 # 单提示词模式
                 if 生图数量 == 1:
-                    # 单张：同步生成 + 保存到磁盘 + 输出 tensor
+                    # 单张：同步生成，输出 tensor
                     generated_images = self.client.generate_sync(
                         prompt=prompt,
                         model=模型,
@@ -730,34 +685,11 @@ class NanoBananaPro:
                         enable_grounding=enable_grounding,
                         enable_image_search=enable_image_search,
                     )
-                    # 单张：保存到磁盘
-                    import os
-                    output_folder = ""
-                    if FOLDER_PATHS_AVAILABLE:
-                        output_folder = folder_paths.get_output_directory()
-                        print(f"Nano Banana Pro: 磁盘保存模式 → {output_folder}")
-                    else:
-                        raise ValueError("无法获取 ComfyUI output 目录，请检查 folder_paths 是否可用")
-                    os.makedirs(output_folder, exist_ok=True)
-                    for gen_img in generated_images:
-                        output_path = generate_timestamp_filename(output_folder=output_folder)
-                        save_image(gen_img, output_path)
                 else:
-                    # 多张：异步并发 + 磁盘保存（与批量提示词逻辑一致）
-                    print(f"Nano Banana Pro: 单提示词×{生图数量}张 → 异步并发模式")
+                    # 多张：异步并发，内存输出
 
                     if pbar is not None:
                         pbar = ProgressBar(生图数量)
-
-                    output_folder = ""
-                    if FOLDER_PATHS_AVAILABLE:
-                        output_folder = folder_paths.get_output_directory()
-                        print(f"Nano Banana Pro: 磁盘保存模式 → {output_folder}")
-                    else:
-                        raise ValueError("无法获取 ComfyUI output 目录，请检查 folder_paths 是否可用")
-
-                    import os
-                    os.makedirs(output_folder, exist_ok=True)
 
                     def run_async_in_thread():
                         loop = asyncio.new_event_loop()
@@ -771,10 +703,11 @@ class NanoBananaPro:
                                     aspect_ratio=宽高比,
                                     images_per_prompt=生图数量,
                                     input_images=input_images,
-                                    output_folder=output_folder,
+                                    output_folder="",
                                     pbar=pbar,
                                     enable_grounding=enable_grounding,
                                     enable_image_search=enable_image_search,
+                                    save_to_disk=False,
                                 )
                             )
                         finally:
@@ -783,16 +716,13 @@ class NanoBananaPro:
                     with ThreadPoolExecutor(max_workers=1) as executor:
                         future = executor.submit(run_async_in_thread)
                         try:
-                            results = future.result(timeout=3600)
+                            results = future.result(timeout=900)
                         except TimeoutError:
-                            raise RuntimeError("任务执行超时（1小时），请减少生图数量或检查网络连接")
+                            raise RuntimeError("任务执行超时（900秒），请减少生图数量或检查网络连接")
 
                     success_count = sum(1 for r in results if r.get("success", False))
                     fail_count = len(results) - success_count
                     total_generated = sum(r.get("generated_count", 0) for r in results)
-                    all_saved_files = []
-                    for r in results:
-                        all_saved_files.extend(r.get("saved_files", []))
 
                     elapsed = time.time() - start_time
                     time_str = f"{elapsed:.3f}s" if elapsed < 1 else f"{elapsed:.2f}s"
@@ -806,24 +736,16 @@ class NanoBananaPro:
                             error_msg = fr.get("error", "未知错误")
                             print(f"  失败 #{idx}: {prompt[:30]}{'...' if len(prompt) >= 30 else ''} → {error_msg}")
 
-                    # 从磁盘加载最后 10 张图片
+                    # 收集内存中的图像
                     output_images = []
-                    max_output_images = 10
-                    recent_files = all_saved_files[-min(max_output_images, len(all_saved_files)):]
-                    for file_path in recent_files:
-                        try:
-                            img = Image.open(file_path)
-                            output_images.append(img)
-                        except Exception as e:
-                            print(f"Nano Banana Pro: 无法加载 {file_path} - {e}")
+                    for r in results:
+                        output_images.extend(r.get("output_images", []))
 
                     if not output_images:
                         placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
                         output_images = [placeholder]
 
                     output_tensor = _images_to_tensor_safe(output_images, _NODE)
-                    print(f"Nano Banana Pro: 共保存 {len(all_saved_files)} 张图片到磁盘，节点输出最后 {len(output_images)} 张")
-                    # 不生成 prompts_map.txt（单提示词无需映射）
 
                     import gc
                     gc.collect()
@@ -851,9 +773,9 @@ class NanoBananaPro:
             
             # 打印最终汇总
             if fail_count > 0:
-                print(f"[4/4] 完成！总耗时 {time_str} | 成功 {success_count}张 | 失败 {fail_count}张")
+                print(f"完成！总耗时 {time_str} | 成功 {success_count}张 | 失败 {fail_count}张")
             else:
-                print(f"[4/4] 完成！总耗时 {time_str} | 成功 {len(generated_images)}张")
+                print(f"完成！总耗时 {time_str} | 成功 {len(generated_images)}张")
             
             # 最终内存清理
             import gc
@@ -861,7 +783,7 @@ class NanoBananaPro:
             if MEMORY_MONITOR_AVAILABLE and 生图数量 > 50:
                 final_memory = process.memory_info().rss / 1024 / 1024
                 print(f"Nano Banana Pro: 最终内存使用: {final_memory:.1f} MB")
-            
+
             return (output_tensor,)
         
         except ValueError as e:
@@ -869,24 +791,12 @@ class NanoBananaPro:
             if str(e) == "未授权！":
                 print("请联系作者授权后方可使用！")
                 raise ValueError("未授权！") from None
-            if 跳过错误:
-                print("Nano Banana Pro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
-                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
-                return (pil_to_tensor([placeholder]),)
             raise ValueError(str(e)) from None
 
         except RuntimeError as e:
-            if 跳过错误:
-                print("Nano Banana Pro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
-                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
-                return (pil_to_tensor([placeholder]),)
             raise RuntimeError(str(e)) from None
 
         except Exception as e:
-            if 跳过错误:
-                print("Nano Banana Pro: ⚠️ 跳过错误已开启，返回占位图继续执行队列")
-                placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
-                return (pil_to_tensor([placeholder]),)
             raise type(e)(str(e)) from None
         
         finally:
@@ -898,8 +808,7 @@ class NanoBananaPro:
                     print(f"Nano Banana Pro: {balance_info}")
                 except Exception:
                     pass
-            
+
             # 最终内存清理
             import gc
             gc.collect()
-            print(f"Nano Banana Pro: 最终内存清理完成")

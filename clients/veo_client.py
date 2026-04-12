@@ -160,7 +160,7 @@ class VeoClient(BaseAPIClient):
 
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
 
         try:
@@ -202,7 +202,7 @@ class VeoClient(BaseAPIClient):
 
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
 
         interval = self.POLL_INITIAL_INTERVAL
@@ -265,7 +265,7 @@ class VeoClient(BaseAPIClient):
 
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
 
         try:
@@ -318,7 +318,7 @@ class VeoClient(BaseAPIClient):
         """
 
         async def _run():
-            connector = aiohttp.TCPConnector(limit=0)
+            connector = aiohttp.TCPConnector(ssl=False, limit=0)
             async with aiohttp.ClientSession(connector=connector) as session:
                 # 1. 提交任务
                 if on_stage:
@@ -383,7 +383,7 @@ class VeoClient(BaseAPIClient):
         """
         async def _run():
             batch_size = len(save_paths)
-            connector = aiohttp.TCPConnector(limit=0)
+            connector = aiohttp.TCPConnector(ssl=False, limit=0)
 
             async def generate_one(save_path: str):
                 return await self._generate_one_video_async(

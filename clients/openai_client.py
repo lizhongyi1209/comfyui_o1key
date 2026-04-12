@@ -309,7 +309,7 @@ class OpenAIAPIClient(BaseAPIClient):
 
         close_session = False
         if session is None:
-            session = aiohttp.ClientSession()
+            session = self._make_session()
             close_session = True
 
         try:
@@ -677,7 +677,7 @@ class OpenAIAPIClient(BaseAPIClient):
 
         print(f"OpenAIClient: 批量生成 {batch_size} 张，并发数: {max_concurrent}，分 {num_batches} 批")
 
-        connector = aiohttp.TCPConnector(limit=0, limit_per_host=0)
+        connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
 
         async with aiohttp.ClientSession(connector=connector) as session:
             for batch_idx in range(num_batches):

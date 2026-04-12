@@ -6,17 +6,19 @@ ComfyUI 自定义节点，通过 OpenAI 兼容协议调用市面上主流的 AI 
 API 密钥和地址通过插件统一配置（环境变量或 .config 文件），与 Google Gemini 节点一致
 """
 
+import os
 import time
 import base64
 import json
 from io import BytesIO
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import torch
 from PIL import Image
 
 from ..utils.image_utils import tensor_to_pil
 from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.file_types import FileList
 
 # ============================================================================
 # 模型配置
@@ -76,7 +78,12 @@ class UniversalLLMChat:
             },
             "optional": {
                 "图片": ("IMAGE",),
-            }
+                "视频": ("VIDEO",),
+                "文件": ("FILE_LIST",),
+            },
+            "hidden": {
+                "node_id": "UNIQUE_ID",
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -113,12 +120,90 @@ class UniversalLLMChat:
         b64 = base64.b64encode(data).decode('utf-8')
         return f"data:image/jpeg;base64,{b64}"
 
-    def _build_messages(
+    # 文件大小限制
+    MAX_FILE_SIZE = 50 * 1024 * 1024       # 单文件 50MB
+    MAX_TOTAL_FILE_SIZE = 50 * 1024 * 1024  # 所有文件总计 50MB
+
+    # 常见 MIME 类型映射
+    MIME_MAP = {
+        ".pdf": "application/pdf",
+        ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".csv": "text/csv",
+        ".json": "application/json",
+        ".py": "text/x-python",
+        ".js": "text/javascript",
+        ".html": "text/html",
+        ".xml": "application/xml",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".zip": "application/zip",
+    }
+
+    # 纯文本类型，直接读取内容
+    TEXT_EXTS = {".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html",
+                 ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".log",
+                 ".sh", ".bat", ".sql", ".css", ".scss", ".jsx", ".tsx"}
+
+    def _load_files(self, file_paths_str: str) -> List[dict]:
+        """读取文件列表，返回 content part 数组"""
+        if not file_paths_str or not file_paths_str.strip():
+            return []
+
+        paths = [p.strip() for p in file_paths_str.split(",") if p.strip()]
+        parts = []
+        total_size = 0
+
+        for path in paths:
+            if not os.path.isfile(path):
+                raise ValueError(f"文件不存在: {path}")
+
+            file_size = os.path.getsize(path)
+            if file_size > self.MAX_FILE_SIZE:
+                raise ValueError(f"文件 {os.path.basename(path)} 大小 {file_size / 1024 / 1024:.1f}MB 超过单文件 50MB 限制")
+
+            total_size += file_size
+            if total_size > self.MAX_TOTAL_FILE_SIZE:
+                raise ValueError(f"所有文件总大小超过 50MB 限制")
+
+            ext = os.path.splitext(path)[1].lower()
+            mime = self.MIME_MAP.get(ext, "application/octet-stream")
+            filename = os.path.basename(path)
+
+            if ext in self.TEXT_EXTS:
+                # 文本文件直接读取内容
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    text_content = f.read()
+                parts.append({
+                    "type": "text",
+                    "text": f"[文件: {filename}]\n```\n{text_content}\n```",
+                })
+            else:
+                # 二进制文件转 base64，使用 file 格式（OpenAI 兼容协议）
+                with open(path, "rb") as f:
+                    file_data = base64.b64encode(f.read()).decode("utf-8")
+                parts.append({
+                    "type": "file",
+                    "file": {
+                        "filename": filename,
+                        "file_data": f"data:{mime};base64,{file_data}",
+                    },
+                })
+
+            print(f"全能LLM: 加载文件 {filename} ({file_size / 1024:.1f}KB, {mime})")
+
+        return parts
+
+    def _build_input(
         self,
         prompt: str,
         images: Optional[torch.Tensor] = None,
+        file_paths: str = "",
+        file_list: Optional[FileList] = None,
+        video=None,
     ) -> list:
-        """构建 OpenAI 格式的 messages 数组"""
+        """构建 chat/completions 格式的 messages 数组"""
         image_data_urls = []
         pil_images_cache = []  # 保留 PIL Image 用于总体积重新编码
         
@@ -177,48 +262,151 @@ class UniversalLLMChat:
                     print(f"全能LLM: 无法将 {len(pil_images_cache)} 张图片压缩到 {MAX_IMAGE_SIZE // 1024 // 1024}MB 以内，请减少图片数量或降低分辨率")
                     raise ValueError(f"图片总体积 {total_bytes / 1024 / 1024:.2f}MB 超过限制，无法压缩到 {MAX_IMAGE_SIZE // 1024 // 1024}MB 以内")
 
-        if not image_data_urls:
+        # 处理视频输入（ComfyUI VIDEO 类型）
+        video_url_str = ""
+        if video is not None:
+            # 从 VIDEO 对象中提取文件路径
+            vp = None
+            if isinstance(video, dict):
+                vp = video.get("video") or video.get("path") or video.get("file") or video.get("filename")
+                if not vp:
+                    for val in video.values():
+                        if isinstance(val, str) and os.path.exists(val):
+                            vp = val
+                            break
+            elif isinstance(video, str):
+                vp = video
+            else:
+                for attr in ("video", "path", "filename"):
+                    if hasattr(video, attr):
+                        vp = getattr(video, attr)
+                        break
+                if not vp and hasattr(video, "__dict__"):
+                    for attr_val in video.__dict__.values():
+                        if isinstance(attr_val, str) and os.path.isfile(attr_val):
+                            vp = attr_val
+                            break
+
+            if not vp or not os.path.isfile(vp):
+                raise ValueError(f"视频文件不存在或路径无效: {vp}")
+
+            mime_map = {
+                ".mp4": "video/mp4", ".mpeg": "video/mpeg", ".mpg": "video/mpg",
+                ".mov": "video/quicktime", ".avi": "video/x-msvideo",
+                ".flv": "video/x-flv", ".webm": "video/webm",
+                ".wmv": "video/x-ms-wmv", ".mkv": "video/x-matroska",
+            }
+            ext = os.path.splitext(vp)[1].lower()
+            mime = mime_map.get(ext, "video/mp4")
+            file_size = os.path.getsize(vp)
+            print(f"全能LLM: 加载视频 {os.path.basename(vp)} ({file_size / 1024 / 1024:.1f}MB, {mime})")
+            with open(vp, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            video_url_str = f"data:{mime};base64,{b64}"
+
+        # 加载文件：优先使用 FILE_LIST，其次使用字符串路径
+        file_parts = []
+        if file_list:
+            for fd in file_list:
+                print(f"全能LLM: 使用文件 {fd.filename}{fd.extension} ({fd.size / 1024:.1f}KB)")
+                file_parts.append({
+                    "type": "file",
+                    "file": {
+                        "filename": fd.filename + fd.extension,
+                        "file_data": f"data:{fd.mime_type};base64,{fd.data}",
+                    },
+                })
+        elif file_paths:
+            file_parts = self._load_files(file_paths)
+
+        # 纯文本，无图片无文件无视频
+        if not image_data_urls and not file_parts and not video_url_str:
             return [{"role": "user", "content": prompt}]
 
         content_parts = []
+
+        # 图片
         for url in image_data_urls:
             content_parts.append({
                 "type": "image_url",
-                "image_url": {"url": url}
+                "image_url": {"url": url},
             })
+
+        # 视频：用 image_url 类型传 data URL（Gemini OpenAI 兼容层支持此格式）
+        # 同时保留 video_url 类型作为备用（其他支持 video_url 的模型）
+        if video_url_str:
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": video_url_str},
+            })
+
+        # 文件
+        for fp in file_parts:
+            content_parts.append(fp)
+
         content_parts.append({
             "type": "text",
-            "text": prompt
+            "text": prompt,
         })
 
         return [{"role": "user", "content": content_parts}]
+
+    @staticmethod
+    def _send_stream_token(node_id, token, done=False):
+        """通过 PromptServer 向前端推送流式 token"""
+        try:
+            from server import PromptServer
+            PromptServer.instance.send_sync(
+                "o1key.stream_token",
+                {"node_id": str(node_id), "token": token, "done": done},
+            )
+        except Exception:
+            pass
 
     def generate(
         self,
         模型: str,
         提示词: str,
         图片: Optional[torch.Tensor] = None,
+        视频=None,
+        文件: Optional[FileList] = None,
+        node_id: str = "",
     ) -> Tuple[str]:
         start_time = time.time()
 
         try:
             self._ensure_config()
 
-            # 构建 messages
-            messages = self._build_messages(提示词, 图片)
+            # 构建 input
+            input_data = self._build_input(提示词, 图片, "", 文件, 视频)
 
             img_count = len(tensor_to_pil(图片)) if 图片 is not None else 0
-            input_desc = "文本" + (f" + {img_count}张图片" if img_count > 0 else "")
+            file_count = len(文件) if 文件 else 0
+            input_desc = "文本"
+            if img_count: input_desc += f" + {img_count}张图片"
+            if 视频 is not None: input_desc += " + 视频"
+            if file_count: input_desc += f" + {file_count}个文件"
 
             print(f"全能LLM: 模型 = {模型}")
             print(f"全能LLM: 输入 = {input_desc}")
 
-            # 构建请求体
+            # 构建请求体（chat/completions 格式）
             request_body = {
                 "model": 模型,
-                "messages": messages,
-                "stream": False,
+                "messages": input_data,
+                "stream": True,
             }
+
+            # 打印请求体，base64 截断显示
+            def _truncate_for_log(obj):
+                if isinstance(obj, dict):
+                    return {k: _truncate_for_log(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_truncate_for_log(i) for i in obj]
+                if isinstance(obj, str) and (obj.startswith("data:image") or obj.startswith("data:application") or obj.startswith("data:text")):
+                    return obj[:60] + f"...[{len(obj)}chars]"
+                return obj
+            print(f"全能LLM: 请求原始内容 = {json.dumps(_truncate_for_log(request_body), ensure_ascii=False)}")
 
             # 发送请求（在独立线程中运行异步请求，避免与 ComfyUI 事件循环冲突）
             import aiohttp
@@ -236,9 +424,9 @@ class UniversalLLMChat:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.post(url, headers=headers, json=request_body) as resp:
                         status = resp.status
-                        body = await resp.text()
 
                         if status != 200:
+                            body = await resp.text()
                             try:
                                 err_data = json.loads(body)
                                 err_msg = err_data.get("error", {}).get("message", body[:200])
@@ -256,7 +444,30 @@ class UniversalLLMChat:
                             else:
                                 raise RuntimeError(f"API 错误 ({status}): {err_msg}")
 
-                        return json.loads(body)
+                        # 流式读取，拼接 delta content
+                        reply_parts = []
+                        async for raw_line in resp.content:
+                            line = raw_line.decode("utf-8").strip()
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data_str = line[len("data:"):].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                            except Exception:
+                                continue
+                            choices = chunk.get("choices")
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content")
+                            if content:
+                                reply_parts.append(content)
+                                UniversalLLMChat._send_stream_token(node_id, content)
+
+                        UniversalLLMChat._send_stream_token(node_id, "", done=True)
+                        return "".join(reply_parts)
 
             def _run_in_thread():
                 loop = asyncio.new_event_loop()
@@ -266,24 +477,10 @@ class UniversalLLMChat:
                     loop.close()
 
             with ThreadPoolExecutor(max_workers=1) as pool:
-                response_data = pool.submit(_run_in_thread).result()
-
-            # 解析响应
-            choices = response_data.get("choices", [])
-            if not choices:
-                raise RuntimeError("API 返回了空响应（无 choices）")
-
-            reply = choices[0].get("message", {}).get("content", "")
-
-            # Token 用量
-            usage = response_data.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
-            total_tokens = usage.get("total_tokens", 0)
+                reply = pool.submit(_run_in_thread).result()
 
             elapsed = time.time() - start_time
             print(f"全能LLM: 生成完成 (耗时: {elapsed:.2f}s)")
-            print(f"全能LLM: Token 用量 — 输入: {prompt_tokens}, 输出: {completion_tokens}, 合计: {total_tokens}")
             if reply:
                 preview = reply[:100] + "..." if len(reply) > 100 else reply
                 print(f"全能LLM: 回复预览: {preview}")
