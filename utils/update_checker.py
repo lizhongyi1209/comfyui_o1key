@@ -72,10 +72,9 @@ def check_for_updates() -> bool:
 
 
 def get_update_changelog() -> list:
-    """从远程 CHANGELOG.md 最新版本块中提取更新内容（最多3条）"""
+    """从远程 CHANGELOG.md 最新版本块中提取更新内容（最多5条）"""
     try:
         plugin_dir = os.path.dirname(os.path.dirname(__file__))
-        # 读取远程最新的 CHANGELOG.md
         result = subprocess.run(
             ['git', 'show', 'origin/main:CHANGELOG.md'],
             cwd=plugin_dir,
@@ -85,24 +84,21 @@ def get_update_changelog() -> list:
         )
         lines = result.stdout.splitlines()
 
-        # 找到第一个版本块（## [x.x.x]）
         in_block = False
         items = []
         for line in lines:
             if line.startswith('## [') and not line.startswith('## [Unreleased]'):
                 if in_block:
-                    break  # 遇到下一个版本块，停止
+                    break
                 in_block = True
                 continue
             if in_block:
                 stripped = line.strip()
-                # 提取有实际内容的行（跳过标题、空行、分隔线）
-                if stripped and not stripped.startswith('#') and not stripped.startswith('---') and not stripped.startswith('-  '):
-                    # 去掉 markdown 列表符号和加粗
+                if stripped and not stripped.startswith('#') and not stripped.startswith('---'):
                     text = stripped.lstrip('- ').replace('**', '').strip()
                     if text and len(text) > 3:
                         items.append(text)
-                if len(items) >= 3:
+                if len(items) >= 5:
                     break
 
         return items
