@@ -318,10 +318,14 @@ class GeminiAPIClient(BaseAPIClient):
                         inline_data_key = "inlineData"
                     
                     if inline_data_key:
+                        # 跳过思考链草稿图（thought:true 标记的 inlineData 为模型自检用途，非最终输出）
+                        if part.get("thought") is True:
+                            continue
+
                         inline_data = part[inline_data_key]
                         # 同样兼容 data/mimeType 的命名
                         img_data = inline_data.get("data") or inline_data.get("data", "")
-                        
+
                         if img_data:
                             img = decode_base64_to_pil(img_data)
                             images.append(img)

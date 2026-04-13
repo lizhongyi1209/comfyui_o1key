@@ -65,32 +65,26 @@ def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.
     """
     将 PIL Image 列表转换为 ComfyUI tensor，安全处理多张不同尺寸的情况。
 
-    ComfyUI 的 IMAGE tensor 格式为 [B, H, W, C]，要求 batch 内所有图尺寸相同。
-    当 API 返回多张不同分辨率的图时（主图 + 附图），直接 stack 会崩溃。
-
     策略：
-    - 所有图均已按原始分辨率保存到磁盘（调用此函数前已完成）
-    - 以第一张图的尺寸为基准，只将尺寸相同的图纳入 tensor 输出
-    - 尺寸不同的图跳过（不 resize、不丢弃磁盘文件），并打印日志提示
-    - 若没有任何图与第一张尺寸相同（极罕见），则只输出第一张
+    - 以像素数最大的图尺寸为基准
+    - 只输出与最大尺寸相同的图，其余较小的图丢弃
     """
     if not images:
         placeholder = Image.new('RGB', (512, 512), color=(128, 128, 128))
         return pil_to_tensor([placeholder])
 
-    base_size = images[0].size  # PIL size = (W, H)
+    base_size = max(images, key=lambda img: img.size[0] * img.size[1]).size
     matched = [img for img in images if img.size == base_size]
     skipped = [img for img in images if img.size != base_size]
 
     if skipped:
         sizes_str = ", ".join(f"{img.size[0]}×{img.size[1]}" for img in skipped)
         print(
-            f"{node_label}: API 额外返回了 {len(skipped)} 张不同尺寸的图 ({sizes_str})，"
-            f"已按原始分辨率保存到磁盘，tensor 输出仅包含与主图尺寸相同的 {len(matched)} 张 "
-            f"({base_size[0]}×{base_size[1]})"
+            f"{node_label}: 丢弃 {len(skipped)} 张较小尺寸的图 ({sizes_str})，"
+            f"仅输出最大尺寸 {base_size[0]}×{base_size[1]} 的 {len(matched)} 张"
         )
 
-    return pil_to_tensor(matched if matched else [images[0]])
+    return pil_to_tensor(matched)
 
 
 class NanoBananaPro:
