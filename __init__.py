@@ -11,9 +11,7 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 
 # 检查更新（仅在启动时检查一次）
 try:
-    from .utils.update_checker import check_for_updates, notify_update_available, notify_new_version
-
-    notify_update_available()
+    from .utils.update_checker import check_for_updates, notify_new_version
 
     if check_for_updates():
         notify_new_version()
