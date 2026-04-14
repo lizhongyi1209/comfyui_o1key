@@ -18,5 +18,6 @@ from .universal_llm import UniversalLLMChat
 from .multi_res_preview import MultiResPreview
 from .batch_images_o1key import BatchImagesO1key
 from .seedance_video import Seedance, SeedanceMultiModal
+from .doubao_image import DoubaoImage
 
-__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'MultiResPreview', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview']
+__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'MultiResPreview', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage']

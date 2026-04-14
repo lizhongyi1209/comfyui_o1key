@@ -21,7 +21,7 @@ except Exception:
 
 import ssl
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -78,6 +78,7 @@ NODE_CLASS_MAPPINGS = {
     "Seedance": Seedance,
     "SeedanceMultiModal": SeedanceMultiModal,
     "StreamPreview": StreamPreview,
+    "DoubaoImage": DoubaoImage,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -101,6 +102,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Seedance": "Seedance 视频生成",
     "SeedanceMultiModal": "Seedance 多模态参考生视频",
     "StreamPreview": "流式文本预览",
+    "DoubaoImage": "豆包生图",
 }
 
 WEB_DIRECTORY = "./web"
