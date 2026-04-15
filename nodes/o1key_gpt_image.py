@@ -15,19 +15,17 @@ class O1keyGPTImage:
 
     功能：
       - 文生图：仅提供 prompt
-      - 图生图：提供 prompt + image（无 mask）
-      - 图像编辑：提供 prompt + image + mask（白色区域将被替换）
+      - 图生图：提供 prompt + 图片（无遮罩）
+      - 图像编辑：提供 prompt + 图片 + 遮罩（白色区域将被替换）
 
     参数：
-      - prompt      : 文本提示词（多行）
-      - seed        : 随机种子（0 表示不指定）
-      - quality     : 图像质量 low / medium / high
-      - background  : 背景模式 auto / opaque / transparent
-      - size        : 图像尺寸（auto 让 API 自动决定）
-      - n           : 生成数量 1-8
-      - image       : 可选参考图（用于图生图或编辑）
-      - mask        : 可选蒙版（白色区域将被替换）
-      - model       : 模型选择 gpt-image-1 / gpt-image-1.5
+      - prompt   : 文本提示词（多行）
+      - 模型     : 模型选择
+      - 分辨率   : 图像尺寸（auto 让 API 自动决定）
+      - 生图数量 : 生成数量 1-8
+      - seed     : 随机种子（0 表示不指定）
+      - 图片     : 可选参考图（用于图生图或编辑）
+      - 遮罩     : 可选蒙版（白色区域将被替换）
     """
 
     @classmethod
@@ -41,6 +39,26 @@ class O1keyGPTImage:
                 }),
             },
             "optional": {
+                "模型": ([
+                    "gpt-image-1",
+                    "gpt-image-1.5",
+                    "gpt-image-1-特价",
+                    "gpt-image-1.5-特价",
+                ], {
+                    "default": "gpt-image-1.5",
+                }),
+                "分辨率": (["auto", "1024x1024", "1024x1536", "1536x1024"], {
+                    "default": "auto",
+                    "tooltip": "Image size (auto = API decides)",
+                }),
+                "生图数量": ("INT", {
+                    "default": 1,
+                    "min": 1,
+                    "max": 8,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "How many images to generate",
+                }),
                 "seed": ("INT", {
                     "default": 0,
                     "min": 0,
@@ -50,34 +68,11 @@ class O1keyGPTImage:
                     "control_after_generate": True,
                     "tooltip": "Random seed (0 = not specified)",
                 }),
-                "quality": (["low", "medium", "high"], {
-                    "default": "low",
-                    "tooltip": "Image quality, affects cost and generation time.",
-                }),
-                "background": (["auto", "opaque", "transparent"], {
-                    "default": "auto",
-                    "tooltip": "Return image with or without background",
-                }),
-                "size": (["auto", "1024x1024", "1024x1536", "1536x1024"], {
-                    "default": "auto",
-                    "tooltip": "Image size (auto = API decides)",
-                }),
-                "n": ("INT", {
-                    "default": 1,
-                    "min": 1,
-                    "max": 8,
-                    "step": 1,
-                    "display": "number",
-                    "tooltip": "How many images to generate",
-                }),
-                "image": ("IMAGE", {
+                "图片": ("IMAGE", {
                     "tooltip": "Optional reference image for image editing.",
                 }),
-                "mask": ("MASK", {
+                "遮罩": ("MASK", {
                     "tooltip": "Optional mask for inpainting (white areas will be replaced)",
-                }),
-                "model": (["gpt-image-1", "gpt-image-1.5"], {
-                    "default": "gpt-image-1.5",
                 }),
             },
         }
@@ -91,22 +86,20 @@ class O1keyGPTImage:
     def generate(
         self,
         prompt: str,
+        模型: str = "gpt-image-1.5",
+        分辨率: str = "auto",
+        生图数量: int = 1,
         seed: int = 0,
-        quality: str = "low",
-        background: str = "auto",
-        size: str = "auto",
-        n: int = 1,
-        image=None,
-        mask=None,
-        model: str = "gpt-image-1.5",
+        图片=None,
+        遮罩=None,
     ):
         """
         生成图像（文生图 / 图生图 / 图像编辑）
 
         路由逻辑：
-          - 无 image           → generations 接口（文生图）
-          - 有 image，无 mask  → generations 接口（图生图）
-          - 有 image，有 mask  → edits 接口（图像编辑 + 蒙版）
+          - 无图片           → generations 接口（文生图）
+          - 有图片，无遮罩   → edits 接口（图生图）
+          - 有图片，有遮罩   → edits 接口（图像编辑 + 蒙版）
         """
         start_time = time.time()
 
@@ -114,8 +107,8 @@ class O1keyGPTImage:
         if not prompt or not prompt.strip():
             raise ValueError("提示词不能为空")
 
-        if mask is not None and image is None:
-            raise ValueError("提供了蒙版但未提供图像，请同时提供 image 和 mask")
+        if 遮罩 is not None and 图片 is None:
+            raise ValueError("提供了遮罩但未提供图片，请同时提供图片和遮罩")
 
         # ── 2. 创建客户端 ─────────────────────────────────────────────────────
         try:
@@ -130,14 +123,14 @@ class O1keyGPTImage:
         try:
             pil_images = client.run_sync(
                 prompt=prompt,
-                model=model,
-                quality=quality,
-                background=background,
-                size=size,
-                n=n,
+                model=模型,
+                quality="low",
+                background="auto",
+                size=分辨率,
+                n=生图数量,
                 seed=seed,
-                image_tensor=image,
-                mask_tensor=mask,
+                image_tensor=图片,
+                mask_tensor=遮罩,
             )
         except Exception as e:
             error_msg = str(e).split('\n')[0]

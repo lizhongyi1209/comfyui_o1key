@@ -31,8 +31,14 @@ from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
 _ENDPOINT_GENERATIONS = "/v1/images/generations/"
 _ENDPOINT_EDITS       = "/v1/images/edits/"
 
+# ── 模型名映射（UI 显示名 → API 实际参数名）─────────────────────────────────
+_MODEL_NAME_MAP = {
+    "gpt-image-1-特价":   "gpt-image-1-special",
+    "gpt-image-1.5-特价": "gpt-image-1.5-special",
+}
+
 # ── 超时 ──────────────────────────────────────────────────────────────────────
-_REQUEST_TIMEOUT = 300   # 秒
+_REQUEST_TIMEOUT = 900   # 秒
 
 
 class GptImageClient:
@@ -196,8 +202,11 @@ class GptImageClient:
         调用 /v1/images/generations/ 接口。
         当传入 image_tensor 时，以 data URI 格式内联图像（图生图）。
         """
+        # 模型名映射：UI 显示名 → API 参数名
+        api_model = _MODEL_NAME_MAP.get(model, model)
+
         body: dict = {
-            "model":      model,
+            "model":      api_model,
             "prompt":     prompt,
             "quality":    quality,
             "background": background,
@@ -259,7 +268,9 @@ class GptImageClient:
             print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
             return await self._parse_response(resp_json, session)
 
-    # ── 图像编辑（edits 接口，必须带蒙版）───────────────────────────────────
+    # ── 图像编辑（edits 接口，multipart/form-data）──────────────────────────
+    # 注意：o1key 中转服务的 edits 接口暂不支持 quality / background / moderation 参数，
+    # 这些字段暂时不传递，待服务方更新后可恢复。
 
     async def _edit_async(
         self,
@@ -275,37 +286,40 @@ class GptImageClient:
     ) -> List[Image.Image]:
         """
         调用 /v1/images/edits/ 接口（multipart/form-data）。
-        image_tensor 取第一帧（edits 接口仅支持单张输入图）。
+        当前仅传递 model / prompt / n / size / image / mask，
+        quality / background / moderation 暂不支持（o1key 服务端限制）。
         """
-        # 取第一张图
-        single = image_tensor[:1] if image_tensor.dim() == 4 else image_tensor.unsqueeze(0)
-        image_png = self._tensor_to_png_bytes(single)
-        ih, iw = single.shape[1], single.shape[2]
+        # 模型名映射：UI 显示名 → API 参数名
+        api_model = _MODEL_NAME_MAP.get(model, model)
 
-        # 构建 multipart 表单
+        # 将 batch tensor 拆成逐帧列表
+        if image_tensor.dim() == 3:
+            image_tensor = image_tensor.unsqueeze(0)   # [H,W,C] → [1,H,W,C]
+        num_images = image_tensor.shape[0]
+
+        # o1key 中转服务的 edits 接口暂不支持 quality / background / moderation / seed，
+        # 待服务方更新后可重新加入。
         form = aiohttp.FormData()
-        form.add_field("model",      model)
-        form.add_field("prompt",     prompt)
-        form.add_field("quality",    quality)
-        form.add_field("background", background)
-        form.add_field("n",          str(n))
-        form.add_field("moderation", "low")
+        form.add_field("model",  api_model)
+        form.add_field("prompt", prompt)
+        form.add_field("n",      str(n))
 
         if size and size != "auto":
             form.add_field("size", size)
 
-        if seed > 0:
-            form.add_field("seed", str(seed))
+        # 多图：用 image[] 数组字段逐张附加，支持 gpt-image-1.5 最多 16 张
+        for i in range(num_images):
+            frame = image_tensor[i:i+1]               # [1,H,W,C]
+            img_bytes = self._tensor_to_png_bytes(frame)
+            form.add_field(
+                "image[]",
+                img_bytes,
+                filename=f"image_{i}.png",
+                content_type="image/png",
+            )
 
-        # 主图（PNG）
-        form.add_field(
-            "image",
-            image_png,
-            filename="image.png",
-            content_type="image/png",
-        )
+        ih, iw = image_tensor.shape[1], image_tensor.shape[2]
 
-        # 蒙版（PNG，RGBA 格式，透明区域为待编辑区）
         if mask_tensor is not None:
             mask_png = self._mask_tensor_to_rgba_png_bytes(mask_tensor, (ih, iw))
             form.add_field(
@@ -319,7 +333,7 @@ class GptImageClient:
             mode = "图像编辑（无蒙版）"
 
         url = f"{self.base_url}{_ENDPOINT_EDITS}"
-        print(f"[o1key GPT Image] {mode} | 模型={model} | quality={quality} | "
+        print(f"[o1key GPT Image] {mode} | 模型={model} | 参考图={num_images}张 | quality={quality} | "
               f"background={background} | size={size} | n={n}")
 
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
@@ -330,7 +344,7 @@ class GptImageClient:
             async with session.post(
                 url,
                 data=form,
-                headers=self._auth_headers(),   # Content-Type 由 FormData 自动设置
+                headers=self._auth_headers(),
             ) as resp:
                 elapsed = time.time() - t0
                 text = await resp.text()
@@ -374,11 +388,12 @@ class GptImageClient:
         同步入口，在独立线程中运行事件循环，避免与 ComfyUI 主循环冲突。
 
         路由逻辑：
-          - 无 image_tensor           → generations 接口（文生图）
-          - 有 image_tensor，无 mask  → generations 接口（图生图，data URI）
-          - 有 image_tensor，有 mask  → edits 接口（图像编辑 + 蒙版）
+          - 无 image_tensor  → generations 接口（文生图，JSON body）
+          - 有 image_tensor  → edits 接口（图生图/编辑，multipart/form-data）
+            所有模型统一走 multipart，quality/background 通过表单字段传递，
+            new-api 开启"透传请求体"后原样转发给上游。
         """
-        use_edits = (image_tensor is not None and mask_tensor is not None)
+        use_edits = (image_tensor is not None)
 
         if use_edits:
             coro = self._edit_async(
