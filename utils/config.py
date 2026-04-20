@@ -15,7 +15,7 @@ CONFIG_FILE = os.path.join(PLUGIN_ROOT, ".config")
 # ============ API 基础配置 ============
 # 所有 API 客户端的统一基础 URL
 # 可通过环境变量 O1KEY_API_BASE_URL 覆盖
-DEFAULT_API_BASE_URL = "https://vip.o1key.com"
+DEFAULT_API_BASE_URL = "https://api.o1key.com"
 
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, str]:

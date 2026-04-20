@@ -43,14 +43,6 @@ VIDEO_MIME_TYPES = {
     ".3gpp": "video/3gpp"
 }
 
-# 尝试导入视频处理库
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-    print("⚠️ Google Gemini: OpenCV (cv2) 不可用，视频压缩功能将受限")
-
 try:
     import subprocess
     FFMPEG_AVAILABLE = True
@@ -328,63 +320,6 @@ class GoogleGemini:
             print(f"Google Gemini: 视频压缩异常: {str(e)}")
             return False
     
-    def _compress_video_with_opencv(self, input_path: str, output_path: str, scale: float = 0.5) -> bool:
-        """
-        使用 OpenCV 压缩视频（备用方案）
-        
-        Args:
-            input_path: 输入视频路径
-            output_path: 输出视频路径
-            scale: 尺寸缩放比例
-            
-        Returns:
-            是否压缩成功
-        """
-        if not CV2_AVAILABLE:
-            return False
-            
-        try:
-            cap = cv2.VideoCapture(input_path)
-            if not cap.isOpened():
-                return False
-            
-            # 获取原视频参数
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            # 计算新尺寸
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            
-            # 创建视频写入器
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
-            
-            print(f"Google Gemini: 使用 OpenCV 压缩视频，分辨率 {width}x{height} -> {new_width}x{new_height}")
-            
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                # 缩放帧
-                resized = cv2.resize(frame, (new_width, new_height))
-                out.write(resized)
-            
-            cap.release()
-            out.release()
-            
-            if os.path.exists(output_path):
-                final_size = os.path.getsize(output_path)
-                print(f"Google Gemini: 视频压缩完成，最终大小 {final_size / 1024 / 1024:.2f}MB")
-                return True
-            return False
-            
-        except Exception as e:
-            print(f"Google Gemini: OpenCV 压缩失败: {str(e)}")
-            return False
-    
     def _compress_video(self, video_path: str) -> str:
         """
         压缩视频到 1-10MB 之间
@@ -424,18 +359,7 @@ class GoogleGemini:
                         return output_path
                     # 如果仍然太大，继续降低目标
                     os.remove(output_path)
-        
-        # FFmpeg 失败或不可用，尝试 OpenCV
-        if CV2_AVAILABLE:
-            scales = [0.7, 0.5, 0.4, 0.3, 0.25]
-            for scale in scales:
-                if self._compress_video_with_opencv(video_path, output_path, scale):
-                    final_size = os.path.getsize(output_path)
-                    if final_size <= MAX_FILE_SIZE:
-                        return output_path
-                    # 如果仍然太大，继续降低分辨率
-                    os.remove(output_path)
-        
+
         # 所有压缩方法都失败
         raise ValueError(
             f"视频文件过大 ({original_size / 1024 / 1024:.2f}MB) 且无法压缩到 20MB 以下。"

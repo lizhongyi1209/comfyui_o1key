@@ -577,7 +577,14 @@ class GeminiAPIClient(BaseAPIClient):
             download_info = f"{img_size_str}"
         
         # 单行输出
-        print(f"{task_prefix}请求 {size_str} → API {request_time:.1f}s → {download_info} ✓")
+        timing = response.get("_timing", {})
+        net_connect = timing.get("connect_time")
+        net_download = timing.get("download_time")
+        if net_connect is not None and net_download is not None:
+            net_str = f" | 连接 {net_connect:.2f}s | 下载 {net_download:.2f}s"
+        else:
+            net_str = ""
+        print(f"{task_prefix}请求 {size_str} → API {request_time:.1f}s → {download_info} ✓{net_str}")
         
         # 返回结果和计时信息
         total_time = time.time() - total_start
@@ -721,7 +728,8 @@ class GeminiAPIClient(BaseAPIClient):
                 raise first_error
             raise RuntimeError(f"批量生成失败，{fail_count} 个请求全部失败")
 
-        print(f"GeminiClient: 批量生成完成，成功 {success_count}/{batch_size}，失败 {fail_count}")
+        if batch_size > 1:
+            print(f"GeminiClient: 批量生成完成，成功 {success_count}/{batch_size}，失败 {fail_count}")
         return all_images
     
     def generate_sync(

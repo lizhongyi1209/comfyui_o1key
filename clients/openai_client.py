@@ -632,7 +632,14 @@ class OpenAIAPIClient(BaseAPIClient):
         else:
             download_info = img_size_str
 
-        print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → {download_info} ✓")
+        timing = response.get("_timing", {})
+        net_connect = timing.get("connect_time")
+        net_download = timing.get("download_time")
+        if net_connect is not None and net_download is not None:
+            net_str = f" | 连接 {net_connect:.2f}s | 下载 {net_download:.2f}s"
+        else:
+            net_str = ""
+        print(f"{task_prefix} 请求 {size_str} → API {request_time:.1f}s → {download_info} ✓{net_str}")
 
         total_time = time.time() - total_start
         timing_info = {

@@ -14,6 +14,7 @@ import torch
 from ..clients.seedance_client import SeedanceClient
 from ..clients.gemini_client import GeminiAPIClient
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64, pil_to_tensor
+from ..utils.r2_uploader import upload_video, upload_audio
 
 from comfy_api.latest import InputImpl
 
@@ -28,7 +29,6 @@ except ImportError:
 
 _MODELS = [
     "doubao-seedance-2-0-260128",
-    "doubao-seedance-2-0-fast-260128",
 ]
 
 _RESOLUTIONS = ["720p", "480p"]
@@ -72,78 +72,6 @@ def _tensor_to_base64_url(tensor) -> str:
     b64 = encode_image_to_base64(pil_images[0], format="PNG")
     return f"data:image/png;base64,{b64}"
 
-
-def _video_to_base64_url(video) -> str:
-    """ComfyUI VIDEO 对象 → data:video/<ext>;base64,xxx"""
-    import base64
-    import io as _io
-
-    source = video.get_stream_source()
-
-    if isinstance(source, _io.BytesIO):
-        source.seek(0)
-        data = source.read()
-        ext = "mp4"
-    else:
-        video_path = source
-        if not video_path or not os.path.isfile(video_path):
-            raise ValueError(f"无法获取参考视频文件路径（当前路径：{video_path}）")
-        ext = os.path.splitext(video_path)[1].lower().lstrip(".")
-        if ext not in ("mp4", "mov"):
-            raise ValueError(f"参考视频格式须为 mp4 或 mov，当前为 .{ext}")
-        with open(video_path, "rb") as f:
-            data = f.read()
-
-    b64 = base64.b64encode(data).decode("utf-8")
-    return f"data:video/{ext};base64,{b64}"
-
-
-def _audio_to_base64_url(audio) -> str:
-    """ComfyUI AUDIO dict（waveform tensor + sample_rate）→ data:audio/wav;base64,xxx"""
-    import base64
-    import io
-    import struct
-    import numpy as np
-
-    waveform = audio["waveform"]   # shape: [B, C, N] or [C, N]
-    sample_rate = int(audio["sample_rate"])
-
-    # 统一为 [C, N]
-    if waveform.dim() == 3:
-        waveform = waveform[0]
-
-    # 转为 numpy float32，然后转 int16 PCM
-    wav_np = waveform.cpu().numpy()
-    if wav_np.ndim == 2:
-        # 多声道 → 单声道（取均值）
-        wav_np = wav_np.mean(axis=0)
-    wav_np = np.clip(wav_np, -1.0, 1.0)
-    pcm = (wav_np * 32767).astype(np.int16)
-
-    # 写 WAV 文件到内存
-    buf = io.BytesIO()
-    num_samples = len(pcm)
-    num_channels = 1
-    bits_per_sample = 16
-    byte_rate = sample_rate * num_channels * bits_per_sample // 8
-    block_align = num_channels * bits_per_sample // 8
-    data_size = num_samples * block_align
-
-    # RIFF header
-    buf.write(b"RIFF")
-    buf.write(struct.pack("<I", 36 + data_size))
-    buf.write(b"WAVE")
-    # fmt chunk
-    buf.write(b"fmt ")
-    buf.write(struct.pack("<IHHIIHH", 16, 1, num_channels, sample_rate,
-                          byte_rate, block_align, bits_per_sample))
-    # data chunk
-    buf.write(b"data")
-    buf.write(struct.pack("<I", data_size))
-    buf.write(pcm.tobytes())
-
-    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:audio/wav;base64,{b64}"
 
 
 async def _url_to_tensor(url: str) -> torch.Tensor:
@@ -199,6 +127,7 @@ def _make_callbacks(tag: str, pbar):
         if pbar: pbar.update_absolute(5 + int(pct * 0.94), 100)
 
     return on_stage, on_progress
+
 
 
 # ── 统一节点 ─────────────────────────────────────────────────────────────────
@@ -454,7 +383,7 @@ class SeedanceMultiModal:
 
         # 参考视频（最多3个）
         for v in ref_videos:
-            url = _video_to_base64_url(v)
+            url = await upload_video(v)
             content.append({
                 "type":      "video_url",
                 "video_url": {"url": url},
@@ -463,7 +392,7 @@ class SeedanceMultiModal:
 
         # 参考音频（最多3段）
         for a in ref_audios:
-            url = _audio_to_base64_url(a)
+            url = await upload_audio(a)
             content.append({
                 "type":      "audio_url",
                 "audio_url": {"url": url},
@@ -510,19 +439,6 @@ class SeedanceMultiModal:
         }
         if first_image_url:
             body["image"] = first_image_url
-
-        # ── 打印请求体结构（base64 截断显示）────────────────────────────────
-        import json as _json, copy as _copy
-        def _truncate_body(obj):
-            if isinstance(obj, dict):
-                return {k: _truncate_body(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_truncate_body(i) for i in obj]
-            if isinstance(obj, str) and obj.startswith("data:") and len(obj) > 80:
-                return obj[:60] + f"...[{len(obj)}chars]"
-            return obj
-        print("[SeedanceMultiModal] 请求体预览:")
-        print(_json.dumps(_truncate_body(_copy.deepcopy(body)), ensure_ascii=False, indent=2))
 
         # ── 保存路径 ──────────────────────────────────────────────────────
         video_dir = _get_video_output_dir()
