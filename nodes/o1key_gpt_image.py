@@ -42,6 +42,7 @@ class O1keyGPTImage:
                 "模型": ([
                     "gpt-image-1",
                     "gpt-image-1.5",
+                    "gpt-image-2-特价",
                     "gpt-image-1-特价",
                     "gpt-image-1.5-特价",
                 ], {
