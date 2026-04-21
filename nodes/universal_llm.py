@@ -80,6 +80,11 @@ class UniversalLLMChat:
                 "图片": ("IMAGE",),
                 "视频": ("VIDEO",),
                 "文件": ("FILE_LIST",),
+                "令牌": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "placeholder": "留空则使用默认 API Key",
+                }),
             },
             "hidden": {
                 "node_id": "UNIQUE_ID",
@@ -370,12 +375,16 @@ class UniversalLLMChat:
         图片: Optional[torch.Tensor] = None,
         视频=None,
         文件: Optional[FileList] = None,
+        令牌: str = "",
         node_id: str = "",
     ) -> Tuple[str]:
         start_time = time.time()
 
         try:
             self._ensure_config()
+
+            # 如果用户传入了自定义令牌，则覆盖默认 API Key
+            effective_api_key = 令牌.strip() if 令牌 and 令牌.strip() else self._api_key
 
             # 构建 input
             input_data = self._build_input(提示词, 图片, "", 文件, 视频)
@@ -416,7 +425,7 @@ class UniversalLLMChat:
             async def _do_request():
                 headers = {
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self._api_key}",
+                    "Authorization": f"Bearer {effective_api_key}",
                 }
                 url = f"{self._base_url}/v1/chat/completions"
                 timeout = aiohttp.ClientTimeout(total=120)

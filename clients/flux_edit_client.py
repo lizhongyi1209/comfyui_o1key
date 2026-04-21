@@ -22,7 +22,6 @@ SIZE_DISPLAY_MAP = {
     "4K": "4096",
 }
 
-# 轮询直连容器地址，绕过代理层
 POLL_BASE_URL = "https://xrrh7tn08tfgwa8w-8188.container.x-gpu.com"
 
 
@@ -75,7 +74,6 @@ class FluxEditClient:
         """
         size_value = SIZE_DISPLAY_MAP.get(size, size)
 
-        # 1. 提交任务（走代理）
         task_id = self._submit_task_sync(image_bytes, mask_bytes, prompt, size_value)
         if progress_callback:
             progress_callback(f"任务已提交: {task_id[:8]}...")

@@ -10,121 +10,10 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional
 
 import os
-import platform
 import time
 
 import aiohttp
 
-
-def _detect_proxy() -> str | None:
-    """
-    检测当前系统的 HTTP 代理地址。
-    只读取，不修改任何环境变量或系统设置。
-
-    检测顺序：
-      1. 环境变量 HTTPS_PROXY / HTTP_PROXY（用户/启动脚本已配置时直接用）
-      2. Windows 注册表 Internet Settings
-      3. macOS networksetup
-
-    Returns:
-        代理 URL 字符串（如 "http://127.0.0.1:10808"），未检测到返回 None。
-    """
-    # 1. 环境变量优先
-    for key in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY", "all_proxy"):
-        val = os.environ.get(key)
-        if val:
-            return val
-
-    system = platform.system()
-
-    # 2. Windows 注册表
-    if system == "Windows":
-        try:
-            import winreg
-            reg_key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-            )
-            enabled = winreg.QueryValueEx(reg_key, "ProxyEnable")[0]
-            if enabled:
-                server = winreg.QueryValueEx(reg_key, "ProxyServer")[0]
-                if server:
-                    # 过滤掉 "http=...;https=..." 多协议格式，取第一个可用地址
-                    if "=" in server:
-                        # 例: "http=127.0.0.1:10808;https=127.0.0.1:10808"
-                        for part in server.split(";"):
-                            if "=" in part:
-                                addr = part.split("=", 1)[1].strip()
-                                if addr:
-                                    return f"http://{addr}"
-                    else:
-                        return f"http://{server}"
-        except Exception:
-            pass
-
-    # 3. macOS networksetup
-    elif system == "Darwin":
-        try:
-            import subprocess
-            for iface in ("Wi-Fi", "Ethernet", "USB 10/100/1000 LAN"):
-                for flag, proto in (("-getsecurewebproxy", "https"), ("-getwebproxy", "http"),
-                                    ("-getsocksfirewallproxy", "socks5")):
-                    out = subprocess.run(
-                        ["networksetup", flag, iface],
-                        capture_output=True, text=True, timeout=3,
-                    ).stdout
-                    if "Enabled: Yes" in out:
-                        lines = {l.split(":")[0].strip(): l.split(":", 1)[1].strip()
-                                 for l in out.splitlines() if ":" in l}
-                        host = lines.get("Server", "")
-                        port = lines.get("Port", "")
-                        if host and port and port != "0":
-                            return f"{proto}://{host}:{port}"
-        except Exception:
-            pass
-
-    return None
-
-
-# ── 带 TTL 的代理缓存 ──────────────────────────────────────────────────────────
-# Windows 注册表读取 < 1ms，TTL 设短；macOS 需要子进程，TTL 设长一些。
-_PROXY_TTL = 3.0 if platform.system() == "Windows" else 10.0
-_proxy_cache_value: str | None = None
-_proxy_cache_expires: float = 0.0
-_proxy_cache_lock = threading.Lock()
-
-
-def _get_proxy() -> str | None:
-    """
-    返回当前生效的代理地址（带 TTL 缓存）。
-    缓存过期后重新检测，代理状态变化时自动打印日志。
-    """
-    global _proxy_cache_value, _proxy_cache_expires
-
-    now = time.monotonic()
-    if now < _proxy_cache_expires:          # 缓存命中，零开销
-        return _proxy_cache_value
-
-    with _proxy_cache_lock:
-        if now < _proxy_cache_expires:      # 双重检查，防止并发重复检测
-            return _proxy_cache_value
-
-        new_value = _detect_proxy()
-
-        if new_value != _proxy_cache_value:
-            if new_value:
-                print("[o1key] 检测到代理已开启")
-            else:
-                print("[o1key] 代理已关闭，切换为直连模式")
-
-        _proxy_cache_value = new_value
-        _proxy_cache_expires = time.monotonic() + _PROXY_TTL
-        return _proxy_cache_value
-
-
-# 启动时打印一次初始状态
-_initial = _get_proxy()
-print(f"[o1key] 启动代理检测: {'已开启' if _initial else '未开启，直连模式'}")
 
 
 class BaseAPIClient(ABC):
@@ -201,7 +90,7 @@ class BaseAPIClient(ABC):
         避免因客户端系统缺少根证书导致 SSLCertVerificationError。
         """
         connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
-        return aiohttp.ClientSession(connector=connector)
+        return aiohttp.ClientSession(connector=connector, trust_env=False)
 
     def get_headers(self, use_bearer_token: bool = False) -> Dict[str, str]:
         """
@@ -310,9 +199,8 @@ class BaseAPIClient(ABC):
         )
 
         async def _do_request():
-            _proxy = _get_proxy()
             connect_start = time.time()
-            async with session.post(url, json=request_body, headers=headers, timeout=_aiohttp_timeout, proxy=_proxy) as response:
+            async with session.post(url, json=request_body, headers=headers, timeout=_aiohttp_timeout) as response:
                 connect_time = time.time() - connect_start
 
                 if response.status != 200:
@@ -424,9 +312,8 @@ class BaseAPIClient(ABC):
             close_session = True
 
         try:
-            _proxy = _get_proxy()
             _get_start = time.time()
-            async with session.get(url, headers=headers, proxy=_proxy) as response:
+            async with session.get(url, headers=headers) as response:
                 _get_elapsed = time.time() - _get_start
                 if response.status != 200:
                     error_text = await response.text()
