@@ -35,6 +35,7 @@ _ENDPOINT_EDITS       = "/v1/images/edits/"
 _MODEL_NAME_MAP = {
     "gpt-image-1-特价":   "gpt-image-1-special",
     "gpt-image-1.5-特价": "gpt-image-1.5-special",
+    "gpt-image-2-特价":   "gpt-image-2-special",
 }
 
 # ── 超时 ──────────────────────────────────────────────────────────────────────
@@ -333,8 +334,7 @@ class GptImageClient:
             mode = "图像编辑（无蒙版）"
 
         url = f"{self.base_url}{_ENDPOINT_EDITS}"
-        print(f"[o1key GPT Image] {mode} | 模型={model} | 参考图={num_images}张 | quality={quality} | "
-              f"background={background} | size={size} | n={n}")
+        print(f"[o1key GPT Image] {mode} | 模型={model} | 参考图={num_images}张 | size={size} | n={n}")
 
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         timeout   = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)

@@ -48,8 +48,17 @@ class O1keyGPTImage:
                 ], {
                     "default": "gpt-image-1.5",
                 }),
-                "分辨率": (["auto", "1024x1024", "1024x1536", "1536x1024"], {
-                    "default": "auto",
+                "分辨率": ([
+                    "auto（默认）",
+                    "1024x1024（正方形）",
+                    "1536x1024（景观）",
+                    "1024x1536（肖像）",
+                    "2048x2048（2K 平方）",
+                    "2048x1152（2K 横屏）",
+                    "3840x2160（4K 横屏）",
+                    "2160x3840（4K 竖屏）",
+                ], {
+                    "default": "auto（默认）",
                     "tooltip": "Image size (auto = API decides)",
                 }),
                 "生图数量": ("INT", {
@@ -111,6 +120,9 @@ class O1keyGPTImage:
         if 遮罩 is not None and 图片 is None:
             raise ValueError("提供了遮罩但未提供图片，请同时提供图片和遮罩")
 
+        # ── 2. 解析分辨率显示值 → API 参数值 ──────────────────────────────────
+        size = 分辨率.split("（")[0].strip()
+
         # ── 2. 创建客户端 ─────────────────────────────────────────────────────
         try:
             client = GptImageClient()
@@ -127,7 +139,7 @@ class O1keyGPTImage:
                 model=模型,
                 quality="low",
                 background="auto",
-                size=分辨率,
+                size=size,
                 n=生图数量,
                 seed=seed,
                 image_tensor=图片,
