@@ -417,3 +417,35 @@ class GptImageClient:
                 raise RuntimeError(
                     f"o1key GPT Image 请求超时（>{_REQUEST_TIMEOUT}s），请检查网络或稍后重试"
                 )
+
+    # ── 余额查询 ──────────────────────────────────────────────────────────────
+
+    async def _query_balance_async(self) -> dict:
+        url = f"{self.base_url}/api/usage/token"
+        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
+        timeout   = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            async with session.get(url, headers=self._auth_headers()) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"余额查询失败 HTTP {resp.status}")
+                return await resp.json()
+
+    def query_balance_sync(self) -> dict:
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self._query_balance_async())
+            finally:
+                loop.close()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_run).result(timeout=15)
+
+    @staticmethod
+    def format_balance_info(balance_data: dict) -> str:
+        data             = balance_data.get("data", {})
+        api_name         = data.get("name", "未知")
+        total_available  = data.get("total_available", 0)
+        balance_in_dollars = total_available / 500000
+        return f"当前余额：{balance_in_dollars:.2f} | API：{api_name}"

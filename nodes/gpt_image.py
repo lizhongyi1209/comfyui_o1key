@@ -141,20 +141,44 @@ class O1keyGPTImage:
                 raise ValueError("未授权！") from None
             raise
 
-        # ── 4. 解析批量提示词 ─────────────────────────────────────────────────
-        batch_prompts = parse_batch_prompts(prompt)
+        try:
+            # ── 4. 解析批量提示词 ─────────────────────────────────────────────
+            batch_prompts = parse_batch_prompts(prompt)
 
-        # ── 5. 调用 API ───────────────────────────────────────────────────────
-        all_pil_images = []
+            # ── 5. 调用 API ───────────────────────────────────────────────────
+            all_pil_images = []
 
-        if batch_prompts:
-            # 批量模式：逐条提示词调用
-            total = len(batch_prompts)
-            print(f"[o1key GPT Image] 批量模式 | {total} 条提示词 | 每条生成 {生图数量} 张")
-            for idx, p in enumerate(batch_prompts, 1):
+            if batch_prompts:
+                # 批量模式：逐条提示词调用
+                total = len(batch_prompts)
+                print(f"[o1key GPT Image] 批量模式 | {total} 条提示词 | 每条生成 {生图数量} 张")
+                for idx, p in enumerate(batch_prompts, 1):
+                    try:
+                        pil_images = client.run_sync(
+                            prompt=p,
+                            model=模型,
+                            quality=quality,
+                            background="auto",
+                            size=size,
+                            n=生图数量,
+                            seed=seed,
+                            image_tensor=图片,
+                            mask_tensor=遮罩,
+                        )
+                        all_pil_images.extend(pil_images)
+                        snippet = p[:30] + ("..." if len(p) >= 30 else "")
+                        print(f"[o1key GPT Image] [{idx}/{total}] ✓ {snippet}")
+                    except Exception as e:
+                        error_msg = str(e).split('\n')[0]
+                        snippet = p[:30] + ("..." if len(p) >= 30 else "")
+                        print(f"[o1key GPT Image] [{idx}/{total}] ❌ {snippet} → {error_msg}")
+            else:
+                # 单提示词模式
+                if not prompt or not prompt.strip():
+                    raise ValueError("提示词不能为空")
                 try:
                     pil_images = client.run_sync(
-                        prompt=p,
+                        prompt=prompt,
                         model=模型,
                         quality=quality,
                         background="auto",
@@ -165,47 +189,35 @@ class O1keyGPTImage:
                         mask_tensor=遮罩,
                     )
                     all_pil_images.extend(pil_images)
-                    snippet = p[:30] + ("..." if len(p) >= 30 else "")
-                    print(f"[o1key GPT Image] [{idx}/{total}] ✓ {snippet}")
                 except Exception as e:
                     error_msg = str(e).split('\n')[0]
-                    snippet = p[:30] + ("..." if len(p) >= 30 else "")
-                    print(f"[o1key GPT Image] [{idx}/{total}] ❌ {snippet} → {error_msg}")
-        else:
-            # 单提示词模式
-            if not prompt or not prompt.strip():
-                raise ValueError("提示词不能为空")
-            try:
-                pil_images = client.run_sync(
-                    prompt=prompt,
-                    model=模型,
-                    quality=quality,
-                    background="auto",
-                    size=size,
-                    n=生图数量,
-                    seed=seed,
-                    image_tensor=图片,
-                    mask_tensor=遮罩,
-                )
-                all_pil_images.extend(pil_images)
-            except Exception as e:
-                error_msg = str(e).split('\n')[0]
-                print(f"[o1key GPT Image] ❌ {error_msg}")
-                raise RuntimeError(error_msg) from None
+                    print(f"[o1key GPT Image] ❌ {error_msg}")
+                    raise RuntimeError(error_msg) from None
 
-        # ── 6. 检查是否有可用图像 ─────────────────────────────────────────────
-        if not all_pil_images:
-            raise RuntimeError("所有提示词均生成失败，无可用图像输出")
+            # ── 6. 检查是否有可用图像 ─────────────────────────────────────────
+            if not all_pil_images:
+                raise RuntimeError("所有提示词均生成失败，无可用图像输出")
 
-        # ── 7. PIL → tensor ───────────────────────────────────────────────────
-        output_tensor = GptImageClient._pil_list_to_tensor(all_pil_images)
+            # ── 7. PIL → tensor ───────────────────────────────────────────────
+            output_tensor = GptImageClient._pil_list_to_tensor(all_pil_images)
 
-        # ── 8. 完成日志 ───────────────────────────────────────────────────────
-        elapsed = time.time() - start_time
-        print(
-            f"[o1key GPT Image] 完成！耗时 {elapsed:.1f}s，"
-            f"输出 {output_tensor.shape[0]} 张 "
-            f"{output_tensor.shape[2]}×{output_tensor.shape[1]}"
-        )
+            # ── 8. 完成日志 ───────────────────────────────────────────────────
+            elapsed = time.time() - start_time
+            print(
+                f"[o1key GPT Image] 完成！耗时 {elapsed:.1f}s，"
+                f"输出 {output_tensor.shape[0]} 张 "
+                f"{output_tensor.shape[2]}×{output_tensor.shape[1]}"
+            )
 
-        return (output_tensor,)
+            return (output_tensor,)
+
+        finally:
+            self._print_balance(client)
+
+    def _print_balance(self, client):
+        try:
+            balance_data = client.query_balance_sync()
+            balance_info = client.format_balance_info(balance_data)
+            print(f"[o1key GPT Image] {balance_info}")
+        except Exception:
+            pass

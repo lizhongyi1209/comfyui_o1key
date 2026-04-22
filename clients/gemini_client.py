@@ -115,13 +115,13 @@ class GeminiAPIClient(BaseAPIClient):
         return "/v1beta/models/gemini-3-pro-image-preview:generateContent"
     
     def get_http_error_message(self, status_code: int, error_message: str) -> Optional[str]:
-        """Gemini 请求 429/503 时返回图中约定的多行错误框文案。"""
+        """Gemini 请求 429/503/504 时返回中文错误文案。"""
         if status_code == 429:
-            return "该型号资源已耗尽，但只是暂时的，请稍后重试。"
+            return "此型号资源暂时耗尽，继续重试即可"
         if status_code == 503:
             return "此型号目前需求量较大。需求高峰通常是暂时的。请稍后再试。"
         if status_code == 504:
-            return "服务无法在截止期限内完成处理。请稍后重试。"
+            return "服务无法在截止期限内完成处理。可能原因是：您的提示词过大，无法及时处理。"
         return None
     
     def build_request_body(
