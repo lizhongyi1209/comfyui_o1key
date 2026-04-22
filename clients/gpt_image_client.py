@@ -33,7 +33,6 @@ _ENDPOINT_EDITS       = "/v1/images/edits/"
 
 # ── 模型名映射（UI 显示名 → API 实际参数名）─────────────────────────────────
 _MODEL_NAME_MAP = {
-    "gpt-image-1-特价":   "gpt-image-1-special",
     "gpt-image-1.5-特价": "gpt-image-1.5-special",
     "gpt-image-2-特价":   "gpt-image-2-special",
 }
@@ -215,13 +214,7 @@ class GptImageClient:
             "moderation": "low",
         }
 
-        # size = "auto" 时不传该字段，让 API 自行决定
-        if size and size != "auto":
-            body["size"] = size
-
-        # seed > 0 时才传递（0 视为不指定）
-        if seed > 0:
-            body["seed"] = seed
+        body["size"] = size if size else "auto"
 
         # 图生图：将 tensor 转成 data URI 内联
         if image_tensor is not None:
@@ -298,15 +291,15 @@ class GptImageClient:
             image_tensor = image_tensor.unsqueeze(0)   # [H,W,C] → [1,H,W,C]
         num_images = image_tensor.shape[0]
 
-        # o1key 中转服务的 edits 接口暂不支持 quality / background / moderation / seed，
+        # o1key 中转服务的 edits 接口暂不支持 background / moderation / seed，
         # 待服务方更新后可重新加入。
         form = aiohttp.FormData()
-        form.add_field("model",  api_model)
-        form.add_field("prompt", prompt)
-        form.add_field("n",      str(n))
+        form.add_field("model",   api_model)
+        form.add_field("prompt",  prompt)
+        form.add_field("n",       str(n))
+        form.add_field("quality", quality)
 
-        if size and size != "auto":
-            form.add_field("size", size)
+        form.add_field("size", size if size else "auto")
 
         # 多图：用 image[] 数组字段逐张附加，支持 gpt-image-1.5 最多 16 张
         for i in range(num_images):
