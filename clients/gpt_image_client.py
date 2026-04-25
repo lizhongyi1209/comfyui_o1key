@@ -70,6 +70,41 @@ class GptImageClient:
 
     # ── 图像转换工具 ──────────────────────────────────────────────────────────
 
+    # ── 请求体大小限制 ────────────────────────────────────────────────────────
+    _MAX_BODY_BYTES = 20 * 1024 * 1024   # 20 MB
+
+    @staticmethod
+    def _shrink_png_to_limit(png_bytes: bytes, max_bytes: int, label: str = "") -> bytes:
+        """
+        若 PNG bytes 超过 max_bytes，按等比缩放反复压缩直到满足限制。
+        每次将面积缩小至约 80%（线性尺寸缩小至约 89.4%）。
+        """
+        if len(png_bytes) <= max_bytes:
+            return png_bytes
+
+        img = Image.open(BytesIO(png_bytes))
+        w, h = img.size
+        original_size = len(png_bytes)
+        step = 0
+
+        while len(png_bytes) > max_bytes:
+            scale = 0.894   # sqrt(0.8)，面积缩小 20%
+            w = max(1, int(w * scale))
+            h = max(1, int(h * scale))
+            img = img.resize((w, h), Image.LANCZOS)
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            png_bytes = buf.getvalue()
+            step += 1
+
+        tag = f" ({label})" if label else ""
+        print(
+            f"[o1key GPT Image] 图像{tag}超出 {max_bytes // (1024*1024)}MB 限制，"
+            f"已等比缩放 {step} 次：{original_size // 1024}KB → {len(png_bytes) // 1024}KB "
+            f"（{w}×{h}）"
+        )
+        return png_bytes
+
     @staticmethod
     def _tensor_to_png_bytes(tensor: torch.Tensor) -> bytes:
         """
@@ -220,8 +255,20 @@ class GptImageClient:
         if image_tensor is not None:
             pil_images = tensor_to_pil(image_tensor)
             data_urls = []
-            for img in pil_images:
-                b64 = encode_image_to_base64(img, format="PNG")
+            for idx_img, img in enumerate(pil_images):
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
+                # 单张图像预算：20MB 按图数平摊，至少保留 1MB 给其他字段
+                per_image_budget = max(
+                    1024 * 1024,
+                    (self._MAX_BODY_BYTES - 1024 * 1024) // len(pil_images),
+                )
+                # base64 膨胀约 4/3，所以 PNG 目标上限 = budget * 3/4
+                png_budget = int(per_image_budget * 3 / 4)
+                label = f"第{idx_img + 1}张" if len(pil_images) > 1 else ""
+                png_bytes = self._shrink_png_to_limit(png_bytes, png_budget, label)
+                b64 = base64.b64encode(png_bytes).decode("utf-8")
                 data_urls.append(f"data:image/png;base64,{b64}")
             body["image"] = data_urls[0] if len(data_urls) == 1 else data_urls
             mode = f"图生图（参考图 {len(data_urls)} 张）"
@@ -302,9 +349,17 @@ class GptImageClient:
         form.add_field("size", size if size else "auto")
 
         # 多图：用 image[] 数组字段逐张附加，支持 gpt-image-1.5 最多 16 张
+        # 预算：20MB 按图数平摊，蒙版预留 1MB
+        mask_reserve = 1024 * 1024 if mask_tensor is not None else 0
+        per_image_budget = max(
+            1024 * 1024,
+            (self._MAX_BODY_BYTES - mask_reserve) // num_images,
+        )
         for i in range(num_images):
             frame = image_tensor[i:i+1]               # [1,H,W,C]
             img_bytes = self._tensor_to_png_bytes(frame)
+            label = f"第{i + 1}张" if num_images > 1 else ""
+            img_bytes = self._shrink_png_to_limit(img_bytes, per_image_budget, label)
             form.add_field(
                 "image[]",
                 img_bytes,
