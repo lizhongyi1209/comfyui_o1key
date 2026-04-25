@@ -43,6 +43,7 @@ class BaseAPIClient(ABC):
         self.base_url = base_url
         self.api_key = api_key
         self.max_request_size = max_request_size
+        self.proxy_url: Optional[str] = None  # 由节点在调用前注入，如 "http://127.0.0.1:7897"
     
     @abstractmethod
     def get_endpoint(self, **kwargs) -> str:
@@ -200,7 +201,7 @@ class BaseAPIClient(ABC):
 
         async def _do_request():
             connect_start = time.time()
-            async with session.post(url, json=request_body, headers=headers, timeout=_aiohttp_timeout) as response:
+            async with session.post(url, json=request_body, headers=headers, timeout=_aiohttp_timeout, proxy=self.proxy_url) as response:
                 connect_time = time.time() - connect_start
 
                 if response.status != 200:

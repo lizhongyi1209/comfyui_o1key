@@ -149,6 +149,12 @@ class NanoBananaPro:
         optional_inputs = {}
         for i in range(1, 10):  # 1-9
             optional_inputs[f"参考图{i}"] = ("IMAGE",)
+
+        optional_inputs["代理端口（如7897）"] = ("STRING", {
+            "default": "",
+            "multiline": False,
+            "placeholder": "本地代理端口，如 7897（Clash Verge）或 10808（v2rayN），留空不使用"
+        })
         
         return {
             "required": {
@@ -464,6 +470,7 @@ class NanoBananaPro:
         # 从 kwargs 提取搜索参数（界面显示为「关闭/打开」，转为 bool 供调用）
         enable_grounding: bool = (kwargs.pop("谷歌搜索（联网）", "关闭") == "打开")
         enable_image_search: bool = (kwargs.pop("图片搜索（联网）", "关闭") == "打开")
+        proxy_port: str = kwargs.pop("代理端口（如7897）", "")
 
         # 创建 ComfyUI 原生进度条
         pbar = None
@@ -488,6 +495,11 @@ class NanoBananaPro:
                     self.client = GeminiAPIClient()
                 except ValueError as e:
                     raise ValueError(f"初始化失败: {str(e)}")
+
+            # 注入代理设置（每次执行都刷新，支持用户中途修改端口）
+            self.client.proxy_url = GeminiAPIClient.build_proxy_url(proxy_port)
+            if self.client.proxy_url:
+                print(f"Nano Banana Pro: 已启用代理加速 → {self.client.proxy_url}")
             
             # 校验分辨率与模型的兼容性
             supported_resolutions = get_model_supported_resolutions(模型)

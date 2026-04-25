@@ -22,7 +22,7 @@ except Exception:
 import ssl
 
 from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, KVideo
-from .nodes import K3Video
+from .nodes import K3Video, K3VideoFirstLast
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -83,6 +83,7 @@ NODE_CLASS_MAPPINGS = {
     "O1keyGPTImage": O1keyGPTImage,
     "KVideo": KVideo,
     "K3Video": K3Video,
+    "K3VideoFirstLast": K3VideoFirstLast,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -110,6 +111,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "O1keyGPTImage": "o1key GPT Image",
     "KVideo": "K26 图生视频",
     "K3Video": "K3 图生视频 自研",
+    "K3VideoFirstLast": "首尾帧 K3 自研",
 }
 
 WEB_DIRECTORY = "./web"

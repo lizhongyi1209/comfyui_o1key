@@ -38,6 +38,23 @@ class GeminiAPIClient(BaseAPIClient):
             max_request_size=100 * 1024 * 1024
         )
     
+    @staticmethod
+    def build_proxy_url(port: str) -> Optional[str]:
+        """
+        将端口号字符串转为 aiohttp 可用的 HTTP 代理 URL。
+        兼容 Windows / Mac，支持 v2rayN (10808) 和 Clash Verge (7897)。
+
+        Args:
+            port: 用户填写的端口号，如 "7897" 或 "10808"；空字符串返回 None
+
+        Returns:
+            代理 URL，如 "http://127.0.0.1:7897"，或 None（不使用代理）
+        """
+        port = (port or "").strip()
+        if not port or not port.isdigit():
+            return None
+        return f"http://127.0.0.1:{port}"
+
     def get_endpoint(self, model: str = "", resolution: str = "2K", **kwargs) -> str:
         """
         根据模型和分辨率获取 API 端点
@@ -124,6 +141,37 @@ class GeminiAPIClient(BaseAPIClient):
             return "服务无法在截止期限内完成处理。可能原因是：您的提示词过大，无法及时处理。"
         return None
     
+    @staticmethod
+    def _estimate_body_size(parts: list, extra_body: dict) -> int:
+        """
+        快速估算请求体 JSON 序列化后的字节数。
+        extra_body 为除 contents[0].parts 以外的其余字段。
+        """
+        import json
+        body = {
+            "contents": [{"role": "user", "parts": parts}],
+            **extra_body
+        }
+        return len(json.dumps(body).encode("utf-8"))
+
+    @staticmethod
+    def _scale_images_to_fit(
+        images: List[Image.Image],
+        scale: float
+    ) -> List[Image.Image]:
+        """
+        将所有图片按统一比例等比缩放（Lanczos，不降质量）。
+        scale < 1.0 时缩小，>= 1.0 时原样返回。
+        """
+        if scale >= 1.0:
+            return images
+        result = []
+        for img in images:
+            new_w = max(1, int(img.width * scale))
+            new_h = max(1, int(img.height * scale))
+            result.append(img.resize((new_w, new_h), Image.Resampling.LANCZOS))
+        return result
+
     def build_request_body(
         self,
         prompt: str = "",
@@ -148,6 +196,8 @@ class GeminiAPIClient(BaseAPIClient):
         Returns:
             请求体字典
         """
+        _MAX_BODY_BYTES = 20 * 1024 * 1024  # 20 MB
+
         parts = []
 
         # 添加文本部分
@@ -155,14 +205,59 @@ class GeminiAPIClient(BaseAPIClient):
 
         # 添加图像部分（如果有）
         if images:
-            for img in images:
-                img_base64 = encode_image_to_base64(img)
-                parts.append({
-                    "inline_data": {
-                        "mime_type": "image/png",
-                        "data": img_base64
+            working_images = list(images)
+
+            # 编码一次，估算大小，超限则迭代缩放
+            for _attempt in range(10):
+                img_parts = []
+                for img in working_images:
+                    img_base64 = encode_image_to_base64(img)
+                    img_parts.append({
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": img_base64
+                        }
+                    })
+
+                # 估算完整 body 大小（不含工具字段，工具字段很小可忽略）
+                estimated = self._estimate_body_size(
+                    parts + img_parts,
+                    {
+                        "generationConfig": {
+                            "responseModalities": ["TEXT", "IMAGE"],
+                            "imageConfig": {
+                                "aspectRatio": aspect_ratio,
+                                "imageSize": resolution
+                            }
+                        }
                     }
-                })
+                )
+
+                if estimated <= _MAX_BODY_BYTES:
+                    parts.extend(img_parts)
+                    if _attempt > 0:
+                        orig_sizes = ", ".join(
+                            f"{img.width}×{img.height}" for img in images
+                        )
+                        new_sizes = ", ".join(
+                            f"{img.width}×{img.height}" for img in working_images
+                        )
+                        size_mb = estimated / (1024 * 1024)
+                        print(
+                            f"Nano Banana Pro: 输入图片已自动缩放以控制请求体积\n"
+                            f"  原始尺寸: {orig_sizes}\n"
+                            f"  缩放后:   {new_sizes}\n"
+                            f"  请求体积: {size_mb:.2f}MB（限制 20MB）"
+                        )
+                    break
+                else:
+                    # 按像素面积比推算需要的线性缩放系数，留 5% 余量
+                    ratio = (_MAX_BODY_BYTES * 0.95) / estimated
+                    scale = ratio ** 0.5  # 面积比 → 线性比
+                    working_images = self._scale_images_to_fit(working_images, scale)
+            else:
+                # 10 轮后仍超限，使用最后一次结果（极端情况兜底）
+                parts.extend(img_parts)
 
         # 构建请求体
         request_body = {

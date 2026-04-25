@@ -214,6 +214,12 @@ class BatchNanoBananaPro:
         optional_inputs["图片配对模式"] = (cls.PAIRING_MODES, {
             "default": "不配对"
         })
+
+        optional_inputs["代理加速"] = ("STRING", {
+            "default": "",
+            "multiline": False,
+            "placeholder": "本地代理端口，如 7897（Clash Verge）或 10808（v2rayN），留空不使用"
+        })
         
         return {
             "required": {
@@ -742,6 +748,7 @@ class BatchNanoBananaPro:
         # 从 kwargs 提取搜索参数（界面显示为「关闭/打开」，转为 bool 供调用）
         enable_grounding: bool = (kwargs.pop("谷歌搜索（联网）", "关闭") == "打开")
         enable_image_search: bool = (kwargs.pop("图片搜索（联网）", "关闭") == "打开")
+        proxy_port: str = kwargs.pop("代理加速", "")
 
 
         try:
@@ -881,6 +888,11 @@ class BatchNanoBananaPro:
                     self.client = GeminiAPIClient()
                 except ValueError as e:
                     raise ValueError(f"初始化 API 客户端失败: {str(e)}")
+
+            # 注入代理设置（每次执行都刷新，支持用户中途修改端口）
+            self.client.proxy_url = GeminiAPIClient.build_proxy_url(proxy_port)
+            if self.client.proxy_url:
+                print(f"BatchNanoBananaPro: 已启用代理加速 → {self.client.proxy_url}")
             
             # 判断是否使用默认 output 目录
             original_save_path = kwargs.get('保存路径', '')
