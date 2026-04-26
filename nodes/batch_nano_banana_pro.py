@@ -215,7 +215,7 @@ class BatchNanoBananaPro:
             "default": "不配对"
         })
 
-        optional_inputs["代理加速"] = ("STRING", {
+        optional_inputs["代理端口（如7897）"] = ("STRING", {
             "default": "",
             "multiline": False,
             "placeholder": "本地代理端口，如 7897（Clash Verge）或 10808（v2rayN），留空不使用"
@@ -241,6 +241,9 @@ class BatchNanoBananaPro:
                 }),
                 "图片搜索（联网）": (["关闭", "打开"], {
                     "default": "关闭"
+                }),
+                "返回格式": (["url", "base64"], {
+                    "default": "url"
                 }),
                 "seed": ("INT", {
                     "default": 0,
@@ -412,6 +415,7 @@ class BatchNanoBananaPro:
         enable_grounding: bool = True,
         enable_image_search: bool = False,
         base_filename: str = None,
+        image_format: str = "url",
     ) -> dict:
         """
         执行单个生成任务
@@ -458,6 +462,7 @@ class BatchNanoBananaPro:
                     debug_request=REQUEST_LOG_ENABLED,
                     enable_grounding=enable_grounding,
                     enable_image_search=enable_image_search,
+                    image_format=image_format,
                 )
                 if gen_result:
                     # 正确解包元组：第一个元素是图像列表，第二个是计时信息
@@ -532,6 +537,7 @@ class BatchNanoBananaPro:
         prompts_per_task: Optional[List[str]] = None,
         enable_grounding: bool = True,
         enable_image_search: bool = False,
+        image_format: str = "url",
     ) -> List[dict]:
         """
         异步批量处理所有任务 - 改进版：支持分批保存
@@ -623,6 +629,7 @@ class BatchNanoBananaPro:
                             enable_grounding=enable_grounding,
                             enable_image_search=enable_image_search,
                             base_filename=base_filename,
+                            image_format=image_format,
                         )
                     )
                     tasks.append(task)
@@ -748,7 +755,8 @@ class BatchNanoBananaPro:
         # 从 kwargs 提取搜索参数（界面显示为「关闭/打开」，转为 bool 供调用）
         enable_grounding: bool = (kwargs.pop("谷歌搜索（联网）", "关闭") == "打开")
         enable_image_search: bool = (kwargs.pop("图片搜索（联网）", "关闭") == "打开")
-        proxy_port: str = kwargs.pop("代理加速", "")
+        proxy_port: str = kwargs.pop("代理端口（如7897）", "")
+        image_format: str = kwargs.pop("返回格式", "url")
 
 
         try:
@@ -916,6 +924,7 @@ class BatchNanoBananaPro:
                             prompts_per_task=prompts_per_task,
                             enable_grounding=enable_grounding,
                             enable_image_search=enable_image_search,
+                            image_format=image_format,
                         )
                     )
                 except Exception as e:

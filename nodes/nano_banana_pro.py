@@ -183,6 +183,9 @@ class NanoBananaPro:
                 "图片搜索（联网）": (["关闭", "打开"], {
                     "default": "关闭"
                 }),
+                "返回格式": (["url", "base64"], {
+                    "default": "url"
+                }),
                 "seed": ("INT", {
                     "default": 0,
                     "min": 0,
@@ -293,6 +296,7 @@ class NanoBananaPro:
         enable_grounding: bool = False,
         enable_image_search: bool = False,
         save_to_disk: bool = True,
+        image_format: str = "url",
     ) -> dict:
         """执行单个生成任务"""
         result = {
@@ -317,6 +321,7 @@ class NanoBananaPro:
                 debug_request=REQUEST_LOG_ENABLED,
                 enable_grounding=enable_grounding,
                 enable_image_search=enable_image_search,
+                image_format=image_format,
             )
             if gen_result:
                 images_list, _ = gen_result
@@ -352,6 +357,7 @@ class NanoBananaPro:
         enable_grounding: bool = False,
         enable_image_search: bool = False,
         save_to_disk: bool = True,
+        image_format: str = "url",
     ) -> List[dict]:
         """异步批量处理：每个提示词独立调用 API"""
         # 构建任务列表：(prompt, sub_index) 用于 images_per_prompt > 1 的情况
@@ -394,6 +400,7 @@ class NanoBananaPro:
                             enable_grounding=enable_grounding,
                             enable_image_search=enable_image_search,
                             save_to_disk=save_to_disk,
+                            image_format=image_format,
                         )
                     )
                     tasks.append(task)
@@ -471,6 +478,7 @@ class NanoBananaPro:
         enable_grounding: bool = (kwargs.pop("谷歌搜索（联网）", "关闭") == "打开")
         enable_image_search: bool = (kwargs.pop("图片搜索（联网）", "关闭") == "打开")
         proxy_port: str = kwargs.pop("代理端口（如7897）", "")
+        image_format: str = kwargs.pop("返回格式", "url")
 
         # 创建 ComfyUI 原生进度条
         pbar = None
@@ -629,6 +637,7 @@ class NanoBananaPro:
                                 enable_grounding=enable_grounding,
                                 enable_image_search=enable_image_search,
                                 save_to_disk=False,
+                                image_format=image_format,
                             )
                         )
                     finally:
@@ -694,6 +703,7 @@ class NanoBananaPro:
                                 debug_request=REQUEST_LOG_ENABLED,
                                 enable_grounding=enable_grounding,
                                 enable_image_search=enable_image_search,
+                                image_format=image_format,
                             )
                             break
                         except RuntimeError as e:
@@ -731,6 +741,7 @@ class NanoBananaPro:
                                     enable_grounding=enable_grounding,
                                     enable_image_search=enable_image_search,
                                     save_to_disk=False,
+                                    image_format=image_format,
                                 )
                             )
                         finally:

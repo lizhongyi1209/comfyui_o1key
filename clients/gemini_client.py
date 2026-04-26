@@ -55,81 +55,87 @@ class GeminiAPIClient(BaseAPIClient):
             return None
         return f"http://127.0.0.1:{port}"
 
-    def get_endpoint(self, model: str = "", resolution: str = "2K", **kwargs) -> str:
+    def get_endpoint(self, model: str = "", resolution: str = "2K", image_format: str = "base64", **kwargs) -> str:
         """
         根据模型和分辨率获取 API 端点
-        
+
         Args:
             model: 模型名称
             resolution: 分辨率（1K, 2K, 4K）
-        
+            image_format: 返回格式，"url" 时追加 ?image_format=url 查询参数
+
         Returns:
             API 端点路径
         """
         from ..models_config import get_model_endpoint
-        
+
         # 特殊处理：动态端点模型（根据分辨率选择）
         if model == "nano-banana-pro-限时特价":
             if resolution == "1K":
-                return "/v1beta/models/nano-banana-pro:generateContent"
+                endpoint = "/v1beta/models/nano-banana-pro:generateContent"
             elif resolution == "2K":
-                return "/v1beta/models/nano-banana-pro-2k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-pro-2k:generateContent"
             elif resolution == "4K":
-                return "/v1beta/models/nano-banana-pro-4k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-pro-4k:generateContent"
             else:
-                return "/v1beta/models/nano-banana-pro-2k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-pro-2k:generateContent"
 
         elif model == "nano-banana-2-限时特价":
             if resolution == "512px":
-                return "/v1beta/models/nano-banana-2-0.5k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-0.5k:generateContent"
             elif resolution == "1K":
-                return "/v1beta/models/nano-banana-2-1k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-1k:generateContent"
             elif resolution == "2K":
-                return "/v1beta/models/nano-banana-2-2k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-2k:generateContent"
             elif resolution == "4K":
-                return "/v1beta/models/nano-banana-2-4k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-4k:generateContent"
             else:
-                return "/v1beta/models/nano-banana-2-2k:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-2k:generateContent"
 
         elif model == "nano-banana-2-官方计费":
             if resolution == "512px":
-                return "/v1beta/models/nano-banana-2-0.5k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-0.5k-official:generateContent"
             elif resolution == "1K":
-                return "/v1beta/models/nano-banana-2-1k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-1k-official:generateContent"
             elif resolution == "2K":
-                return "/v1beta/models/nano-banana-2-2k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-2k-official:generateContent"
             elif resolution == "4K":
-                return "/v1beta/models/nano-banana-2-4k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-4k-official:generateContent"
             else:
-                return "/v1beta/models/nano-banana-2-2k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-2-2k-official:generateContent"
 
         elif model == "nano-banana-pro-官方计费":
             if resolution == "1K":
-                return "/v1beta/models/nano-banana-pro-1k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-pro-1k-official:generateContent"
             elif resolution == "2K":
-                return "/v1beta/models/nano-banana-pro-2k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-pro-2k-official:generateContent"
             elif resolution == "4K":
-                return "/v1beta/models/nano-banana-pro-4k-official:generateContent"
+                endpoint = "/v1beta/models/nano-banana-pro-4k-official:generateContent"
             else:
-                return "/v1beta/models/nano-banana-pro-2k-official:generateContent"
-        
+                endpoint = "/v1beta/models/nano-banana-pro-2k-official:generateContent"
+
         elif model == "gemini-3-pro-image-preview-url":
             if resolution == "1K":
-                return "/v1beta/models/gemini-3-pro-image-preview-url:generateContent"
+                endpoint = "/v1beta/models/gemini-3-pro-image-preview-url:generateContent"
             elif resolution == "2K":
-                return "/v1beta/models/gemini-3-pro-image-preview-2k-url:generateContent"
+                endpoint = "/v1beta/models/gemini-3-pro-image-preview-2k-url:generateContent"
             elif resolution == "4K":
-                return "/v1beta/models/gemini-3-pro-image-preview-4k-url:generateContent"
+                endpoint = "/v1beta/models/gemini-3-pro-image-preview-4k-url:generateContent"
             else:
-                return "/v1beta/models/gemini-3-pro-image-preview-2k-url:generateContent"
-        
-        # 其他模型：从配置文件读取端点
-        endpoint = get_model_endpoint(model)
-        if endpoint:
-            return endpoint
-        
-        # 兜底：使用标准模式端点
-        return "/v1beta/models/gemini-3-pro-image-preview:generateContent"
+                endpoint = "/v1beta/models/gemini-3-pro-image-preview-2k-url:generateContent"
+
+        else:
+            # 其他模型：从配置文件读取端点
+            endpoint = get_model_endpoint(model)
+            if not endpoint:
+                # 兜底：使用标准模式端点
+                endpoint = "/v1beta/models/gemini-3-pro-image-preview:generateContent"
+
+        # url 模式：追加查询参数
+        if image_format == "url":
+            endpoint = endpoint + "?image_format=url"
+
+        return endpoint
     
     def get_http_error_message(self, status_code: int, error_message: str) -> Optional[str]:
         """Gemini 请求 429/503/504 时返回中文错误文案。"""
@@ -415,12 +421,39 @@ class GeminiAPIClient(BaseAPIClient):
                         if img_data:
                             img = decode_base64_to_pil(img_data)
                             images.append(img)
-                            
+
                             # 记录格式信息
                             if format_info["type"] is None:
                                 format_info["type"] = "base64"
                                 format_info["size"] = len(img_data) * 3 / 4  # Base64 解码后的字节数
                                 format_info["resolution"] = f"{img.size[0]}x{img.size[1]}"
+
+                    # 方式1b: fileData（?image_format=url 模式下服务端返回 URL 替代 inlineData）
+                    elif "fileData" in part:
+                        if part.get("thought") is True:
+                            continue
+                        file_data = part["fileData"]
+                        url = file_data.get("fileUri") or file_data.get("file_uri", "")
+                        if url:
+                            try:
+                                download_start = time.time()
+                                async with session.get(url) as img_response:
+                                    if img_response.status == 200:
+                                        img_bytes = await img_response.read()
+                                        download_time = time.time() - download_start
+                                        img_size = len(img_bytes)
+                                        speed = img_size / download_time if download_time > 0 else 0
+
+                                        img = Image.open(BytesIO(img_bytes))
+                                        images.append(img)
+
+                                        if format_info["type"] is None:
+                                            format_info["type"] = "url"
+                                            format_info["size"] = img_size
+                                            format_info["resolution"] = f"{img.size[0]}x{img.size[1]}"
+                                            format_info["download_speed"] = speed
+                            except Exception:
+                                pass  # 静默失败
                     
                     # 方式2: text 中的 URL - 改为异步下载
                     elif "text" in part:
@@ -525,6 +558,7 @@ class GeminiAPIClient(BaseAPIClient):
         debug_request: bool = False,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
+        image_format: str = "base64",
     ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
         单次异步生成请求（极简单行日志）
@@ -555,7 +589,7 @@ class GeminiAPIClient(BaseAPIClient):
         
         # ========== 1. 构建请求 ==========
         build_start = time.time()
-        endpoint = self.get_endpoint(model=model, resolution=resolution)
+        endpoint = self.get_endpoint(model=model, resolution=resolution, image_format=image_format)
         request_body = self.build_request_body(
             prompt=prompt,
             images=images,
@@ -697,6 +731,7 @@ class GeminiAPIClient(BaseAPIClient):
         debug_request: bool = False,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
+        image_format: str = "base64",
     ) -> List[Image.Image]:
         """
         批量全并发生成 - 改进版：支持分批处理和内存管理
@@ -760,6 +795,7 @@ class GeminiAPIClient(BaseAPIClient):
                             debug_request=debug_request,
                             enable_grounding=enable_grounding,
                             enable_image_search=enable_image_search,
+                            image_format=image_format,
                         ),
                         name=f"task_{task_index}"
                     )
@@ -831,6 +867,7 @@ class GeminiAPIClient(BaseAPIClient):
         debug_request: bool = False,
         enable_grounding: bool = False,
         enable_image_search: bool = False,
+        image_format: str = "base64",
     ) -> List[Image.Image]:
         """
         同步生成接口（用于 ComfyUI）
@@ -863,6 +900,7 @@ class GeminiAPIClient(BaseAPIClient):
             debug_request=debug_request,
             enable_grounding=enable_grounding,
             enable_image_search=enable_image_search,
+            image_format=image_format,
         )
 
         return self.run_async_in_thread(coro)
