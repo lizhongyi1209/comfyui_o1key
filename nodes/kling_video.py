@@ -3,42 +3,13 @@ Kling 3.0 Video Nodes
 """
 
 import os
-import re
+import tempfile
 
 from ..clients.kling_client import KlingClient
 from ..clients.gemini_client import GeminiAPIClient
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
 
 from comfy_api.latest import InputImpl
-
-try:
-    import folder_paths
-    FOLDER_PATHS_AVAILABLE = True
-except ImportError:
-    FOLDER_PATHS_AVAILABLE = False
-
-
-def _get_video_output_dir() -> str:
-    if FOLDER_PATHS_AVAILABLE:
-        base = folder_paths.get_output_directory()
-    else:
-        plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        base = os.path.join(os.path.dirname(os.path.dirname(plugin_dir)), "output")
-    video_dir = os.path.join(base, "video")
-    os.makedirs(video_dir, exist_ok=True)
-    return video_dir
-
-
-def _get_next_counter(directory: str, prefix: str) -> int:
-    if not os.path.exists(directory):
-        return 1
-    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)")
-    max_counter = 0
-    for f in os.listdir(directory):
-        m = pattern.match(f)
-        if m:
-            max_counter = max(max_counter, int(m.group(1)))
-    return max_counter + 1
 
 
 def _tensor_to_base64(tensor) -> str:
@@ -276,10 +247,8 @@ class KlingVideo:
             body["metadata"] = {"aspect_ratio": aspect_ratio}
             endpoint_type = "text2video"
 
-        # ── 保存路径 ──────────────────────────────────────────────────
-        video_dir = _get_video_output_dir()
-        counter   = _get_next_counter(video_dir, "kling")
-        save_path = os.path.join(video_dir, f"kling_{counter:05d}.mp4")
+        # ── 保存路径（临时文件，避免与下游保存节点重复落盘）──────────────────
+        _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="kling_")
 
         client = KlingClient()
 
@@ -418,10 +387,8 @@ class KlingFirstLastFrame:
         else:
             body["prompt"] = prompt
 
-        # 保存路径
-        video_dir = _get_video_output_dir()
-        counter   = _get_next_counter(video_dir, "kling")
-        save_path = os.path.join(video_dir, f"kling_{counter:05d}.mp4")
+        # 保存路径（临时文件，避免与下游保存节点重复落盘）
+        _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="kling_")
 
         client = KlingClient()
 
@@ -589,10 +556,8 @@ class KlingMotionControlTest:
             "keep_original_sound":   "yes" if keep_original_sound == "打开" else "no",
         }
 
-        # ── 保存路径 ──────────────────────────────────────────────────
-        video_dir = _get_video_output_dir()
-        counter   = _get_next_counter(video_dir, "kling_motion")
-        save_path = os.path.join(video_dir, f"kling_motion_{counter:05d}.mp4")
+        # ── 保存路径（临时文件，避免与下游保存节点重复落盘）──────────────────
+        _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="kling_motion_")
 
         client = KlingClient()
 

@@ -7,7 +7,7 @@ K3 图生视频 自研节点（图生视频 / 多镜头）
 import asyncio
 import json
 import os
-import re
+import tempfile
 
 import aiohttp
 
@@ -46,28 +46,6 @@ _POLL_MAX  = 15
 
 
 # ── 工具函数 ───────────────────────────────────────────────────────────────────
-
-def _get_video_dir() -> str:
-    if _FOLDER_PATHS_OK:
-        base = folder_paths.get_output_directory()
-    else:
-        plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        base = os.path.join(os.path.dirname(os.path.dirname(plugin)), "output")
-    d = os.path.join(base, "video")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def _next_counter(directory: str, prefix: str) -> int:
-    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)")
-    max_n = 0
-    if os.path.exists(directory):
-        for f in os.listdir(directory):
-            m = pattern.match(f)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-    return max_n + 1
-
 
 def _image_to_base64(tensor) -> str:
     pil = tensor_to_pil(tensor)
@@ -259,10 +237,8 @@ class K3Video:
         def _progress(pct: int):
             if pbar: pbar.update_absolute(5 + int(pct * 0.94), 100)
 
-        # ── 保存路径 ──────────────────────────────────────────────────
-        video_dir = _get_video_dir()
-        counter   = _next_counter(video_dir, "k3")
-        save_path = os.path.join(video_dir, f"k3_{counter:05d}.mp4")
+        # ── 保存路径（临时文件，避免与下游保存节点重复落盘）──────────────────
+        tmp_fd, save_path = tempfile.mkstemp(suffix=".mp4", prefix="k3_")
 
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
@@ -345,7 +321,7 @@ class K3Video:
             async with session.get(video_url, allow_redirects=True) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"视频下载失败 ({resp.status})")
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                os.close(tmp_fd)
                 with open(save_path, "wb") as f:
                     async for chunk in resp.content.iter_chunked(8192):
                         f.write(chunk)

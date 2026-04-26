@@ -6,7 +6,7 @@ Seedance 视频生成节点
 
 import io
 import os
-import re
+import tempfile
 
 import aiohttp
 import torch
@@ -17,12 +17,6 @@ from ..utils.image_utils import tensor_to_pil, encode_image_to_base64, pil_to_te
 from ..utils.r2_uploader import upload_video, upload_audio
 
 from comfy_api.latest import InputImpl
-
-try:
-    import folder_paths
-    FOLDER_PATHS_AVAILABLE = True
-except ImportError:
-    FOLDER_PATHS_AVAILABLE = False
 
 
 # ── 模型列表 ──────────────────────────────────────────────────────────────────
@@ -42,29 +36,6 @@ def _supports_camera_fixed(model: str) -> bool:
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
-
-def _get_video_output_dir() -> str:
-    if FOLDER_PATHS_AVAILABLE:
-        base = folder_paths.get_output_directory()
-    else:
-        plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        base = os.path.join(os.path.dirname(os.path.dirname(plugin_dir)), "output")
-    video_dir = os.path.join(base, "video")
-    os.makedirs(video_dir, exist_ok=True)
-    return video_dir
-
-
-def _get_next_counter(directory: str, prefix: str) -> int:
-    if not os.path.exists(directory):
-        return 1
-    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)")
-    max_counter = 0
-    for f in os.listdir(directory):
-        m = pattern.match(f)
-        if m:
-            max_counter = max(max_counter, int(m.group(1)))
-    return max_counter + 1
-
 
 def _tensor_to_base64_url(tensor) -> str:
     """ComfyUI IMAGE tensor → data:image/png;base64,xxx"""
@@ -267,9 +238,8 @@ class Seedance:
                 "metadata": metadata,
             }
 
-        video_dir = _get_video_output_dir()
-        counter   = _get_next_counter(video_dir, file_prefix)
-        save_path = os.path.join(video_dir, f"{file_prefix}_{counter:05d}.mp4")
+        # 保存路径（临时文件，避免与下游保存节点重复落盘）
+        _, save_path = tempfile.mkstemp(suffix=".mp4", prefix=f"{file_prefix}_")
 
         client            = SeedanceClient()
         pbar              = _make_pbar()
@@ -440,10 +410,8 @@ class SeedanceMultiModal:
         if first_image_url:
             body["image"] = first_image_url
 
-        # ── 保存路径 ──────────────────────────────────────────────────────
-        video_dir = _get_video_output_dir()
-        counter   = _get_next_counter(video_dir, "seedance_mm")
-        save_path = os.path.join(video_dir, f"seedance_mm_{counter:05d}.mp4")
+        # ── 保存路径（临时文件，避免与下游保存节点重复落盘）──────────────────
+        _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="seedance_mm_")
 
         client            = SeedanceClient()
         pbar              = _make_pbar()
