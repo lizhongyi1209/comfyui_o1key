@@ -9,20 +9,11 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 └── __init__.py     # 节点注册入口
 """
 
-# 检查更新（仅在启动时检查一次）
-try:
-    from .utils.update_checker import check_for_updates, notify_new_version
-
-    if check_for_updates():
-        notify_new_version()
-except Exception:
-    # 静默失败，不影响插件加载
-    pass
 
 import ssl
 
 from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, KVideo
-from .nodes import K3Video, K3VideoFirstLast
+from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -84,6 +75,8 @@ NODE_CLASS_MAPPINGS = {
     "KVideo": KVideo,
     "K3Video": K3Video,
     "K3VideoFirstLast": K3VideoFirstLast,
+    "K3MotionControl": K3MotionControl,
+    "K3MotionVideoCheck": K3MotionVideoCheck,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -112,6 +105,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "KVideo": "K26 图生视频",
     "K3Video": "K3 图生视频 自研",
     "K3VideoFirstLast": "首尾帧 K3 自研",
+    "K3MotionControl": "动作控制 K3 自研",
+    "K3MotionVideoCheck": "视频时长检测 K3",
 }
 
 WEB_DIRECTORY = "./web"

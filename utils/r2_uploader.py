@@ -47,6 +47,23 @@ async def _put_upload(upload_url: str, data: bytes, content_type: str):
                 raise RuntimeError(f"文件上传失败 ({resp.status}): {text}")
 
 
+async def upload_image(pil_image) -> str:
+    """
+    接受 PIL Image 对象，编码为 PNG 上传到 R2，返回公网 URL。
+    """
+    import io as _io
+    buf = _io.BytesIO()
+    pil_image.save(buf, format="PNG")
+    data = buf.getvalue()
+    filename = f"{uuid.uuid4()}.png"
+
+    upload_url, public_url = await _presign(filename, "image/png")
+    await _put_upload(upload_url, data, "image/png")
+
+    print(f"[R2] 图片已上传: {public_url}")
+    return public_url
+
+
 async def upload_video(video) -> str:
     """
     接受 ComfyUI VIDEO 对象，上传到 R2，返回公网 URL。

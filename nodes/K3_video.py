@@ -231,7 +231,7 @@ class K3Video:
             if 负向提示词.strip():
                 body["negative_prompt"] = 负向提示词.strip()
             if 生成音频 == "打开":
-                body["generate_audio"] = True
+                body["metadata"] = {"sound": "on"}
 
         # ── 进度条 ────────────────────────────────────────────────────
         try:
