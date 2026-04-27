@@ -12,7 +12,7 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 
 import ssl
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, KVideo
+from .nodes import NanoBananaPro, NanoBananaProAsync, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, KVideo
 from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
@@ -46,11 +46,13 @@ def _wrap_generate_for_error_display(cls, attr="generate"):
     setattr(cls, attr, wrapped)
 
 _wrap_generate_for_error_display(NanoBananaPro)
+_wrap_generate_for_error_display(NanoBananaProAsync)
 _wrap_generate_for_error_display(BatchNanoBananaPro)
 
 # ComfyUI 节点注册
 NODE_CLASS_MAPPINGS = {
     "NanoBananaPro": NanoBananaPro,
+    "NanoBananaProAsync": NanoBananaProAsync,
     "BatchNanoBananaPro": BatchNanoBananaPro,
     "GoogleGemini": GoogleGemini,
     "LoadFile": LoadFile,
@@ -81,6 +83,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "NanoBananaPro": "Nano Banana",
+    "NanoBananaProAsync": "Nano Banana（异步）",
     "BatchNanoBananaPro": "批量 Nano Banana",
     "GoogleGemini": "Google Gemini",
     "LoadFile": "加载文件",

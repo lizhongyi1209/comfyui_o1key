@@ -230,7 +230,7 @@ class GeminiAPIClient(BaseAPIClient):
                     parts + img_parts,
                     {
                         "generationConfig": {
-                            "responseModalities": ["TEXT", "IMAGE"],
+                            "responseModalities": ["IMAGE"],
                             "imageConfig": {
                                 "aspectRatio": aspect_ratio,
                                 "imageSize": resolution
@@ -274,7 +274,7 @@ class GeminiAPIClient(BaseAPIClient):
                 }
             ],
             "generationConfig": {
-                "responseModalities": ["TEXT", "IMAGE"],
+                "responseModalities": ["IMAGE"],
                 "imageConfig": {
                     "aspectRatio": aspect_ratio,
                     "imageSize": resolution

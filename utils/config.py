@@ -17,6 +17,10 @@ CONFIG_FILE = os.path.join(PLUGIN_ROOT, ".config")
 # 可通过环境变量 O1KEY_API_BASE_URL 覆盖
 DEFAULT_API_BASE_URL = "https://api.o1key.com"
 
+# 异步 API 基础 URL（用于异步提交+轮询模式）
+# 可通过环境变量 O1KEY_ASYNC_API_BASE_URL 覆盖
+DEFAULT_ASYNC_API_BASE_URL = "https://cf-api.o1key.com"
+
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, str]:
     """
@@ -115,3 +119,20 @@ def get_api_base_url() -> str:
         return base_url.rstrip('/')
 
     return DEFAULT_API_BASE_URL
+
+
+def get_async_api_base_url() -> str:
+    """
+    获取异步 API 基础 URL
+    从 .config 文件读取，如果未配置则使用默认值
+
+    Returns:
+        异步 API 基础 URL 字符串
+    """
+    config = load_config()
+    base_url = config.get("O1KEY_ASYNC_API_BASE_URL")
+
+    if base_url:
+        return base_url.rstrip('/')
+
+    return DEFAULT_ASYNC_API_BASE_URL

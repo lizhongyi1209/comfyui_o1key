@@ -5,6 +5,7 @@
 
 from .stream_preview import StreamPreview
 from .nano_banana_pro import NanoBananaPro
+from .nano_banana_pro_async import NanoBananaProAsync
 from .batch_nano_banana_pro import BatchNanoBananaPro
 from .google_gemini import GoogleGemini
 from .load_file import LoadFile
@@ -25,4 +26,4 @@ from .K3_video import K3Video
 from .K3_video_firstlast import K3VideoFirstLast
 from .K3_motion_control import K3MotionControl, K3MotionVideoCheck
 
-__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'MultiResPreview', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'KVideo', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck']
+__all__ = ['NanoBananaPro', 'NanoBananaProAsync', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'MultiResPreview', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'KVideo', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck']
