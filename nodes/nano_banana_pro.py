@@ -686,38 +686,21 @@ class NanoBananaPro:
             else:
                 # 单提示词模式
                 if 生图数量 == 1:
-                    # 单张：同步生成，自动重试（429/503/504）
-                    _RETRY_CODES = ("429", "503", "504")
-                    _MAX_RETRIES = 5
-                    for _attempt in range(1, _MAX_RETRIES + 1):
-                        try:
-                            generated_images = self.client.generate_sync(
-                                prompt=prompt,
-                                model=模型,
-                                resolution=分辨率,
-                                aspect_ratio=宽高比,
-                                batch_size=1,
-                                images=input_images,
-                                progress_callback=progress_callback,
-                                debug=DEBUG_LOG_ENABLED,
-                                debug_request=REQUEST_LOG_ENABLED,
-                                enable_grounding=enable_grounding,
-                                enable_image_search=enable_image_search,
-                                image_format=image_format,
-                            )
-                            break
-                        except RuntimeError as e:
-                            error_msg = str(e)
-                            if any(code in error_msg for code in _RETRY_CODES) and _attempt < _MAX_RETRIES:
-                                _wait = 2 ** _attempt
-                                print(f"{'=' * 60}")
-                                print(f"⚠️  Nano Banana Pro 自动重试 [{_attempt}/{_MAX_RETRIES - 1}]")
-                                print(f"   原因：{error_msg}")
-                                print(f"   等待 {_wait}s 后重试...")
-                                print(f"{'=' * 60}")
-                                time.sleep(_wait)
-                            else:
-                                raise
+                    # 单张：同步生成
+                    generated_images = self.client.generate_sync(
+                        prompt=prompt,
+                        model=模型,
+                        resolution=分辨率,
+                        aspect_ratio=宽高比,
+                        batch_size=1,
+                        images=input_images,
+                        progress_callback=progress_callback,
+                        debug=DEBUG_LOG_ENABLED,
+                        debug_request=REQUEST_LOG_ENABLED,
+                        enable_grounding=enable_grounding,
+                        enable_image_search=enable_image_search,
+                        image_format=image_format,
+                    )
                 else:
                     # 多张：异步并发，内存输出
 
