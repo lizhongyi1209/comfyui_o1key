@@ -138,7 +138,7 @@ class NanoBananaProAsync:
                     "max": 1000,
                     "step": 1
                 }),
-                "谷歌搜索（联网）": (["关闭", "打开"], {
+                "联网功能": (["关闭", "打开"], {
                     "default": "关闭"
                 }),
                 "seed": ("INT", {
@@ -436,7 +436,7 @@ class NanoBananaProAsync:
         """生成图像（异步模式）"""
         start_time = time.time()
 
-        enable_grounding: bool = (kwargs.pop("谷歌搜索（联网）", "关闭") == "打开")
+        enable_grounding: bool = (kwargs.pop("联网功能", "关闭") == "打开")
         proxy_port: str = kwargs.pop("代理端口", "")
 
         pbar = None
