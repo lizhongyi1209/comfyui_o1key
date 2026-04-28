@@ -45,11 +45,11 @@ except ImportError:
     MEMORY_MONITOR_AVAILABLE = False
     print("⚠️ NanoBananaProAsync: psutil 不可用，内存监控功能禁用")
 
-DEBUG_LOG_ENABLED = True
-REQUEST_LOG_ENABLED = True
+DEBUG_LOG_ENABLED = False
+REQUEST_LOG_ENABLED = False
 
 _NODE = "Nano Banana Pro（异步）"
-_POLL_INTERVAL = 4  # 轮询间隔（秒）
+_POLL_INTERVAL = 2  # 轮询间隔（秒）
 _MAX_WAIT_TIME = 300  # 最大等待时间（秒）
 
 
@@ -310,7 +310,21 @@ class NanoBananaProAsync:
 
             response_data = await self._poll_task_async(session=session, task_id=task_id)
 
-            images_list, _ = await self.client.parse_response_async(response_data, session=session)
+            # 兼容两种响应格式：
+            # 1. 异步接口直接返回 image_url：{"image_url": "https://..."}
+            # 2. Gemini 标准格式：{"candidates": [...]}
+            image_url = response_data.get("image_url", "") if isinstance(response_data, dict) else ""
+            if image_url:
+                from io import BytesIO
+                async with session.get(image_url) as img_resp:
+                    if img_resp.status == 200:
+                        img_bytes = await img_resp.read()
+                        img = Image.open(BytesIO(img_bytes))
+                        images_list = [img]
+                    else:
+                        raise RuntimeError(f"下载图片失败 ({img_resp.status}): {image_url}")
+            else:
+                images_list, _ = await self.client.parse_response_async(response_data, session=session)
 
             if save_to_disk:
                 for gen_img in images_list:

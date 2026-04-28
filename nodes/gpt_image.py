@@ -33,6 +33,59 @@ class O1keyGPTImage:
 
     @classmethod
     def INPUT_TYPES(cls):
+        # 创建9个独立的参考图输入
+        optional_inputs = {}
+        for i in range(1, 10):
+            optional_inputs[f"参考图{i}"] = ("IMAGE", {
+                "tooltip": f"Optional reference image {i} for image editing.",
+            })
+
+        optional_inputs["模型"] = ([
+            "gpt-image-2",
+            "gpt-image-1.5",
+            "gpt-image-2-特价",
+            "gpt-image-1.5-特价",
+        ], {
+            "default": "gpt-image-2",
+        })
+        optional_inputs["分辨率"] = ([
+            "auto（默认）",
+            "1024x1024（正方形）",
+            "1536x1024（景观）",
+            "1024x1536（肖像）",
+            "2048x2048（2K 平方）",
+            "2048x1152（2K 横屏）",
+            "3840x2160（4K 横屏）",
+            "2160x3840（4K 竖屏）",
+        ], {
+            "default": "auto（默认）",
+            "tooltip": "Image size (auto = API decides)",
+        })
+        optional_inputs["生图数量"] = ("INT", {
+            "default": 1,
+            "min": 1,
+            "max": 8,
+            "step": 1,
+            "display": "number",
+            "tooltip": "How many images to generate per prompt",
+        })
+        optional_inputs["seed"] = ("INT", {
+            "default": 0,
+            "min": 0,
+            "max": 2**31 - 1,
+            "step": 1,
+            "display": "number",
+            "control_after_generate": True,
+            "tooltip": "Random seed (0 = not specified)",
+        })
+        optional_inputs["质量"] = (["高", "中", "低", "自动"], {
+            "default": "自动",
+            "tooltip": "Image quality: 高=high, 中=medium, 低=low, 自动=auto",
+        })
+        optional_inputs["遮罩"] = ("MASK", {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced)",
+        })
+
         return {
             "required": {
                 "prompt": ("STRING", {
@@ -41,56 +94,7 @@ class O1keyGPTImage:
                     "tooltip": "Text prompt for GPT Image. Use --- on its own line to separate batch prompts.",
                 }),
             },
-            "optional": {
-                "模型": ([
-                    "gpt-image-2",
-                    "gpt-image-1.5",
-                    "gpt-image-2-特价",
-                    "gpt-image-1.5-特价",
-                ], {
-                    "default": "gpt-image-2",
-                }),
-                "分辨率": ([
-                    "auto（默认）",
-                    "1024x1024（正方形）",
-                    "1536x1024（景观）",
-                    "1024x1536（肖像）",
-                    "2048x2048（2K 平方）",
-                    "2048x1152（2K 横屏）",
-                    "3840x2160（4K 横屏）",
-                    "2160x3840（4K 竖屏）",
-                ], {
-                    "default": "auto（默认）",
-                    "tooltip": "Image size (auto = API decides)",
-                }),
-                "生图数量": ("INT", {
-                    "default": 1,
-                    "min": 1,
-                    "max": 8,
-                    "step": 1,
-                    "display": "number",
-                    "tooltip": "How many images to generate per prompt",
-                }),
-                "seed": ("INT", {
-                    "default": 0,
-                    "min": 0,
-                    "max": 2**31 - 1,
-                    "step": 1,
-                    "display": "number",
-                    "control_after_generate": True,
-                    "tooltip": "Random seed (0 = not specified)",
-                }),
-                "质量": (["高", "中", "低", "自动"], {
-                    "default": "自动",
-                    "tooltip": "Image quality: 高=high, 中=medium, 低=low, 自动=auto",
-                }),
-                "图片": ("IMAGE", {
-                    "tooltip": "Optional reference image for image editing.",
-                }),
-                "遮罩": ("MASK", {
-                    "tooltip": "Optional mask for inpainting (white areas will be replaced)",
-                }),
-            },
+            "optional": optional_inputs,
         }
 
     RETURN_TYPES = ("IMAGE",)
@@ -107,8 +111,8 @@ class O1keyGPTImage:
         质量: str = "自动",
         生图数量: int = 1,
         seed: int = 0,
-        图片=None,
         遮罩=None,
+        **kwargs,
     ):
         """
         生成图像（文生图 / 图生图 / 图像编辑 / 批量提示词）
@@ -120,6 +124,18 @@ class O1keyGPTImage:
           - prompt 含 ---    → 批量模式，逐条调用上述接口
         """
         start_time = time.time()
+
+        # ── 0. 收集多参考图输入 ────────────────────────────────────────────────
+        reference_tensors = []
+        for i in range(1, 10):
+            key = f"参考图{i}"
+            if key in kwargs and kwargs[key] is not None:
+                reference_tensors.append(kwargs[key])
+
+        if reference_tensors:
+            图片 = torch.cat(reference_tensors, dim=0)
+        else:
+            图片 = None
 
         # ── 1. 参数校验 ───────────────────────────────────────────────────────
         if 遮罩 is not None and 图片 is None:
