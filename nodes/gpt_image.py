@@ -4,8 +4,6 @@ o1key GPT Image 节点
 """
 
 import time
-import torch
-
 from ..clients.gpt_image_client import GptImageClient
 from ..utils.image_utils import parse_batch_prompts
 
@@ -132,10 +130,7 @@ class O1keyGPTImage:
             if key in kwargs and kwargs[key] is not None:
                 reference_tensors.append(kwargs[key])
 
-        if reference_tensors:
-            图片 = torch.cat(reference_tensors, dim=0)
-        else:
-            图片 = None
+        图片 = reference_tensors if reference_tensors else None
 
         # ── 1. 参数校验 ───────────────────────────────────────────────────────
         if 遮罩 is not None and 图片 is None:

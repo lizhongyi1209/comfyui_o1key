@@ -231,11 +231,11 @@ class GptImageClient:
         size: str,
         n: int,
         seed: int,
-        image_tensor: Optional[torch.Tensor] = None,
+        image_list: Optional[List[torch.Tensor]] = None,
     ) -> List[Image.Image]:
         """
         调用 /v1/images/generations/ 接口。
-        当传入 image_tensor 时，以 data URI 格式内联图像（图生图）。
+        当传入 image_list 时，以 data URI 格式内联图像（图生图）。
         """
         # 模型名映射：UI 显示名 → API 参数名
         api_model = _MODEL_NAME_MAP.get(model, model)
@@ -251,22 +251,23 @@ class GptImageClient:
 
         body["size"] = size if size else "auto"
 
-        # 图生图：将 tensor 转成 data URI 内联
-        if image_tensor is not None:
-            pil_images = tensor_to_pil(image_tensor)
+        # 图生图：将 tensor 列表转成 data URI 内联
+        if image_list is not None:
             data_urls = []
-            for idx_img, img in enumerate(pil_images):
+            for idx_img, img_tensor in enumerate(image_list):
+                pil_images = tensor_to_pil(img_tensor)
+                img = pil_images[0]
                 buf = BytesIO()
                 img.save(buf, format="PNG")
                 png_bytes = buf.getvalue()
                 # 单张图像预算：20MB 按图数平摊，至少保留 1MB 给其他字段
                 per_image_budget = max(
                     1024 * 1024,
-                    (self._MAX_BODY_BYTES - 1024 * 1024) // len(pil_images),
+                    (self._MAX_BODY_BYTES - 1024 * 1024) // len(image_list),
                 )
                 # base64 膨胀约 4/3，所以 PNG 目标上限 = budget * 3/4
                 png_budget = int(per_image_budget * 3 / 4)
-                label = f"第{idx_img + 1}张" if len(pil_images) > 1 else ""
+                label = f"第{idx_img + 1}张" if len(image_list) > 1 else ""
                 png_bytes = self._shrink_png_to_limit(png_bytes, png_budget, label)
                 b64 = base64.b64encode(png_bytes).decode("utf-8")
                 data_urls.append(f"data:image/png;base64,{b64}")
@@ -322,7 +323,7 @@ class GptImageClient:
         size: str,
         n: int,
         seed: int,
-        image_tensor: torch.Tensor,
+        image_list: List[torch.Tensor],
         mask_tensor: Optional[torch.Tensor] = None,
     ) -> List[Image.Image]:
         """
@@ -333,10 +334,13 @@ class GptImageClient:
         # 模型名映射：UI 显示名 → API 参数名
         api_model = _MODEL_NAME_MAP.get(model, model)
 
-        # 将 batch tensor 拆成逐帧列表
-        if image_tensor.dim() == 3:
-            image_tensor = image_tensor.unsqueeze(0)   # [H,W,C] → [1,H,W,C]
-        num_images = image_tensor.shape[0]
+        # 统一 tensors 为 [1,H,W,C] 格式，支持不同尺寸
+        normalized_tensors = []
+        for t in image_list:
+            if t.dim() == 3:
+                t = t.unsqueeze(0)   # [H,W,C] → [1,H,W,C]
+            normalized_tensors.append(t)
+        num_images = len(normalized_tensors)
 
         # o1key 中转服务的 edits 接口暂不支持 background / moderation / seed，
         # 待服务方更新后可重新加入。
@@ -355,8 +359,7 @@ class GptImageClient:
             1024 * 1024,
             (self._MAX_BODY_BYTES - mask_reserve) // num_images,
         )
-        for i in range(num_images):
-            frame = image_tensor[i:i+1]               # [1,H,W,C]
+        for i, frame in enumerate(normalized_tensors):
             img_bytes = self._tensor_to_png_bytes(frame)
             label = f"第{i + 1}张" if num_images > 1 else ""
             img_bytes = self._shrink_png_to_limit(img_bytes, per_image_budget, label)
@@ -367,7 +370,9 @@ class GptImageClient:
                 content_type="image/png",
             )
 
-        ih, iw = image_tensor.shape[1], image_tensor.shape[2]
+        # 蒙版尺寸校验以第一张图为基准
+        first_tensor = normalized_tensors[0]
+        ih, iw = first_tensor.shape[1], first_tensor.shape[2]
 
         if mask_tensor is not None:
             mask_png = self._mask_tensor_to_rgba_png_bytes(mask_tensor, (ih, iw))
@@ -429,7 +434,7 @@ class GptImageClient:
         size: str,
         n: int,
         seed: int,
-        image_tensor: Optional[torch.Tensor] = None,
+        image_tensor: Optional[List[torch.Tensor]] = None,
         mask_tensor: Optional[torch.Tensor] = None,
     ) -> List[Image.Image]:
         """
@@ -447,13 +452,13 @@ class GptImageClient:
             coro = self._edit_async(
                 prompt=prompt, model=model, quality=quality,
                 background=background, size=size, n=n, seed=seed,
-                image_tensor=image_tensor, mask_tensor=mask_tensor,
+                image_list=image_tensor, mask_tensor=mask_tensor,
             )
         else:
             coro = self._generate_async(
                 prompt=prompt, model=model, quality=quality,
                 background=background, size=size, n=n, seed=seed,
-                image_tensor=image_tensor,
+                image_list=image_tensor,
             )
 
         def _run():
