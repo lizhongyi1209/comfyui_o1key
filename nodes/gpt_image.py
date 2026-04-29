@@ -23,8 +23,8 @@ class O1keyGPTImage:
       - 模型     : 模型选择
       - 分辨率   : 图像尺寸（auto 让 API 自动决定）
       - 生图数量 : 每条提示词生成数量 1-8
-      - seed     : 随机种子（0 表示不指定）
       - 质量     : 生成质量
+      - seed     : 随机种子（0 表示不指定）
       - 图片     : 可选参考图（用于图生图或编辑）
       - 遮罩     : 可选蒙版（白色区域将被替换）
     """
@@ -39,12 +39,10 @@ class O1keyGPTImage:
             })
 
         optional_inputs["模型"] = ([
-            "gpt-image-2",
-            "gpt-image-1.5",
-            "gpt-image-2-特价",
-            "gpt-image-1.5-特价",
+            "gpt-image-2-按量",
+            "gpt-image-2-次卡",
         ], {
-            "default": "gpt-image-2",
+            "default": "gpt-image-2-次卡",
         })
         optional_inputs["分辨率"] = ([
             "auto（默认）",
@@ -53,6 +51,7 @@ class O1keyGPTImage:
             "1024x1536（肖像）",
             "2048x2048（2K 平方）",
             "2048x1152（2K 横屏）",
+            "1152x2048（2K 竖屏）",
             "3840x2160（4K 横屏）",
             "2160x3840（4K 竖屏）",
         ], {
@@ -67,6 +66,10 @@ class O1keyGPTImage:
             "display": "number",
             "tooltip": "How many images to generate per prompt",
         })
+        optional_inputs["质量"] = (["高", "中", "低", "自动"], {
+            "default": "自动",
+            "tooltip": "Image quality: 高=high, 中=medium, 低=low, 自动=auto",
+        })
         optional_inputs["seed"] = ("INT", {
             "default": 0,
             "min": 0,
@@ -75,10 +78,6 @@ class O1keyGPTImage:
             "display": "number",
             "control_after_generate": True,
             "tooltip": "Random seed (0 = not specified)",
-        })
-        optional_inputs["质量"] = (["高", "中", "低", "自动"], {
-            "default": "自动",
-            "tooltip": "Image quality: 高=high, 中=medium, 低=low, 自动=auto",
         })
         optional_inputs["遮罩"] = ("MASK", {
             "tooltip": "Optional mask for inpainting (white areas will be replaced)",
@@ -104,7 +103,7 @@ class O1keyGPTImage:
     def generate(
         self,
         prompt: str,
-        模型: str = "gpt-image-2",
+        模型: str = "gpt-image-2-次卡",
         分辨率: str = "auto",
         质量: str = "自动",
         生图数量: int = 1,
@@ -169,7 +168,6 @@ class O1keyGPTImage:
                             prompt=p,
                             model=模型,
                             quality=quality,
-                            background="auto",
                             size=size,
                             n=生图数量,
                             seed=seed,
@@ -192,7 +190,6 @@ class O1keyGPTImage:
                         prompt=prompt,
                         model=模型,
                         quality=quality,
-                        background="auto",
                         size=size,
                         n=生图数量,
                         seed=seed,

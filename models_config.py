@@ -44,9 +44,10 @@ from typing import List, Dict, Optional, Tuple
 
 GEMINI_MODELS = [
     {
-        "id": "nano-banana-pro-限时特价",
-        "description": "Nano Banana Pro 限时特价,根据分辨率自动选择端点 (1K/2K/4K),高性能图像生成模型",
+        "id": "nano-banana-pro-次卡",
+        "description": "Nano Banana Pro 次卡,根据分辨率自动选择端点 (1K/2K/4K),高性能图像生成模型",
         "enabled": True,
+        "provider": "gemini_async",
         "endpoint_type": "dynamic",
         "endpoint": None,  # 动态端点，由代码根据分辨率选择
         "supported_aspect_ratios": [
@@ -58,6 +59,7 @@ GEMINI_MODELS = [
         "id": "nano-banana-pro-官方计费",
         "description": "Nano Banana Pro 官方计费，按分辨率路由 (1K/2K/4K)，使用官方计费通道",
         "enabled": True,
+        "provider": "gemini_async",
         "endpoint_type": "dynamic",
         "endpoint": None,  # 动态端点，由代码根据分辨率选择
         "supported_aspect_ratios": [
@@ -66,9 +68,10 @@ GEMINI_MODELS = [
         "supported_resolutions": ["1K", "2K", "4K"]
     },
     {
-        "id": "nano-banana-2-限时特价",
-        "description": "Nano Banana 2 限时特价，根据分辨率自动选择端点 (512px/1K/2K/4K)，图像生成模型",
+        "id": "nano-banana-2-次卡",
+        "description": "Nano Banana 2 次卡，根据分辨率自动选择端点 (512px/1K/2K/4K)，图像生成模型",
         "enabled": True,
+        "provider": "gemini_async",
         "endpoint_type": "dynamic",
         "endpoint": None,  # 动态端点，由代码根据分辨率选择
         "supported_aspect_ratios": [
@@ -81,6 +84,7 @@ GEMINI_MODELS = [
         "id": "nano-banana-2-官方计费",
         "description": "Nano Banana 2 官方计费，按分辨率路由 (512/1K/2K/4K)，使用官方计费通道",
         "enabled": True,
+        "provider": "gemini_async",
         "endpoint_type": "dynamic",
         "endpoint": None,  # 动态端点，由代码根据分辨率选择
         "supported_aspect_ratios": [
@@ -90,9 +94,10 @@ GEMINI_MODELS = [
         "supported_resolutions": ["512px", "1K", "2K", "4K"]
     },
     {
-        "id": "gemini-3-pro-image-preview",
-        "description": "标准模式,固定端点,适用于常规图像生成",
-        "enabled": False,
+        "id": "nano-banana-pro-官方",
+        "description": "Nano Banana Pro 官方，固定端点，适用于常规图像生成",
+        "enabled": True,
+        "provider": "gemini_async",
         "endpoint_type": "standard",
         "endpoint": "/v1beta/models/gemini-3-pro-image-preview:generateContent",
         "supported_aspect_ratios": [
@@ -101,9 +106,10 @@ GEMINI_MODELS = [
         "supported_resolutions": ["1K", "2K", "4K"]
     },
     {
-        "id": "gemini-3.1-flash-image-preview",
-        "description": "Gemini 3.1 Flash 图像生成,固定端点,快速图像生成模型",
-        "enabled": False,
+        "id": "nano-banana-2-官方",
+        "description": "Nano Banana 2 官方，固定端点，快速图像生成模型",
+        "enabled": True,
+        "provider": "gemini_async",
         "endpoint_type": "standard",
         "endpoint": "/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
         "supported_aspect_ratios": [
@@ -339,6 +345,35 @@ def get_all_supported_resolutions() -> List[str]:
             seen.add(res)
 
     return [res for res in _ORDER if res in seen]
+
+
+def get_model_provider(model_id: str) -> Optional[str]:
+    """
+    获取模型的异步 Provider 名称
+
+    Args:
+        model_id: 模型 ID
+
+    Returns:
+        Provider 名称（如 "gemini_async"），如果模型未配置 provider 则返回 None
+    """
+    config = get_model_config(model_id)
+    if config is None:
+        return None
+    return config.get("provider")
+
+
+def get_enabled_async_models() -> List[str]:
+    """
+    获取所有启用的、支持异步模式的模型 ID 列表
+
+    Returns:
+        模型 ID 列表（仅包含配置了 provider 且 enabled 的模型）
+    """
+    return [
+        model["id"] for model in GEMINI_MODELS
+        if model.get("enabled", False) and model.get("provider")
+    ]
 
 
 def get_endpoint_type(model_id: str) -> Optional[str]:

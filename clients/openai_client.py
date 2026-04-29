@@ -56,14 +56,14 @@ class OpenAIAPIClient(BaseAPIClient):
         只是把拼在 URL 路径里的模型段提取出来单独返回。
 
         Args:
-            model:      节点下拉框中的模型 ID，如 "nano-banana-pro-限时特价"
+            model:      节点下拉框中的模型 ID，如 "nano-banana-pro-次卡"
             resolution: 分辨率字符串，如 "1K" / "2K" / "4K" / "512"
 
         Returns:
             实际模型名，如 "nano-banana-pro-2k"
         """
         # ── 动态端点模型 ──────────────────────────────────────────────────
-        if model == "nano-banana-pro-限时特价":
+        if model == "nano-banana-pro-次卡":
             if resolution == "1K":
                 return "nano-banana-pro"
             elif resolution == "4K":

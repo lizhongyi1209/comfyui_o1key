@@ -70,7 +70,7 @@ class GeminiAPIClient(BaseAPIClient):
         from ..models_config import get_model_endpoint
 
         # 特殊处理：动态端点模型（根据分辨率选择）
-        if model == "nano-banana-pro-限时特价":
+        if model == "nano-banana-pro-次卡":
             if resolution == "1K":
                 endpoint = "/v1beta/models/nano-banana-pro:generateContent"
             elif resolution == "2K":
@@ -80,7 +80,7 @@ class GeminiAPIClient(BaseAPIClient):
             else:
                 endpoint = "/v1beta/models/nano-banana-pro-2k:generateContent"
 
-        elif model == "nano-banana-2-限时特价":
+        elif model == "nano-banana-2-次卡":
             if resolution == "512px":
                 endpoint = "/v1beta/models/nano-banana-2-0.5k:generateContent"
             elif resolution == "1K":

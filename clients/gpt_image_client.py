@@ -33,8 +33,7 @@ _ENDPOINT_EDITS       = "/v1/images/edits/"
 
 # ── 模型名映射（UI 显示名 → API 实际参数名）─────────────────────────────────
 _MODEL_NAME_MAP = {
-    "gpt-image-1.5-特价": "gpt-image-1.5-special",
-    "gpt-image-2-特价":   "gpt-image-2-special",
+    "gpt-image-2-次卡": "gpt-image-2-special",
 }
 
 # ── 超时 ──────────────────────────────────────────────────────────────────────
@@ -46,7 +45,7 @@ class GptImageClient:
     GPT Image API 客户端
 
     接口说明：
-      generations：JSON body，支持 background / quality / size / n / model
+      generations：JSON body，支持 quality / size / n / model
       edits：multipart/form-data，必须包含 image（PNG），可选 mask（PNG）
 
     两个接口的响应格式相同：
@@ -227,7 +226,6 @@ class GptImageClient:
         prompt: str,
         model: str,
         quality: str,
-        background: str,
         size: str,
         n: int,
         seed: int,
@@ -244,7 +242,6 @@ class GptImageClient:
             "model":      api_model,
             "prompt":     prompt,
             "quality":    quality,
-            "background": background,
             "n":          n,
             "moderation": "low",
         }
@@ -278,7 +275,7 @@ class GptImageClient:
 
         url = f"{self.base_url}{_ENDPOINT_GENERATIONS}"
         print(f"[o1key GPT Image] {mode} | 模型={model} | quality={quality} | "
-              f"background={background} | size={size} | n={n}")
+              f"size={size} | n={n}")
 
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         timeout   = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
@@ -311,15 +308,12 @@ class GptImageClient:
             return await self._parse_response(resp_json, session)
 
     # ── 图像编辑（edits 接口，multipart/form-data）──────────────────────────
-    # 注意：o1key 中转服务的 edits 接口暂不支持 quality / background / moderation 参数，
-    # 这些字段暂时不传递，待服务方更新后可恢复。
 
     async def _edit_async(
         self,
         prompt: str,
         model: str,
         quality: str,
-        background: str,
         size: str,
         n: int,
         seed: int,
@@ -328,8 +322,6 @@ class GptImageClient:
     ) -> List[Image.Image]:
         """
         调用 /v1/images/edits/ 接口（multipart/form-data）。
-        当前仅传递 model / prompt / n / size / image / mask，
-        quality / background / moderation 暂不支持（o1key 服务端限制）。
         """
         # 模型名映射：UI 显示名 → API 参数名
         api_model = _MODEL_NAME_MAP.get(model, model)
@@ -342,13 +334,11 @@ class GptImageClient:
             normalized_tensors.append(t)
         num_images = len(normalized_tensors)
 
-        # o1key 中转服务的 edits 接口暂不支持 background / moderation / seed，
-        # 待服务方更新后可重新加入。
         form = aiohttp.FormData()
-        form.add_field("model",   api_model)
-        form.add_field("prompt",  prompt)
-        form.add_field("n",       str(n))
-        form.add_field("quality", quality)
+        form.add_field("model",      api_model)
+        form.add_field("prompt",     prompt)
+        form.add_field("n",          str(n))
+        form.add_field("quality",    quality)
 
         form.add_field("size", size if size else "auto")
 
@@ -387,7 +377,8 @@ class GptImageClient:
             mode = "图像编辑（无蒙版）"
 
         url = f"{self.base_url}{_ENDPOINT_EDITS}"
-        print(f"[o1key GPT Image] {mode} | 模型={model} | 参考图={num_images}张 | size={size} | n={n}")
+        print(f"[o1key GPT Image] {mode} | 模型={model} | 参考图={num_images}张 | "
+              f"quality={quality} | size={size} | n={n}")
 
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         timeout   = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
@@ -430,7 +421,6 @@ class GptImageClient:
         prompt: str,
         model: str,
         quality: str,
-        background: str,
         size: str,
         n: int,
         seed: int,
@@ -443,21 +433,19 @@ class GptImageClient:
         路由逻辑：
           - 无 image_tensor  → generations 接口（文生图，JSON body）
           - 有 image_tensor  → edits 接口（图生图/编辑，multipart/form-data）
-            所有模型统一走 multipart，quality/background 通过表单字段传递，
-            new-api 开启"透传请求体"后原样转发给上游。
         """
         use_edits = (image_tensor is not None)
 
         if use_edits:
             coro = self._edit_async(
                 prompt=prompt, model=model, quality=quality,
-                background=background, size=size, n=n, seed=seed,
+                size=size, n=n, seed=seed,
                 image_list=image_tensor, mask_tensor=mask_tensor,
             )
         else:
             coro = self._generate_async(
                 prompt=prompt, model=model, quality=quality,
-                background=background, size=size, n=n, seed=seed,
+                size=size, n=n, seed=seed,
                 image_list=image_tensor,
             )
 
