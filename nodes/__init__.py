@@ -18,7 +18,7 @@ from .universal_llm import UniversalLLMChat
 from .multi_res_preview import MultiResPreview
 from .batch_images_o1key import BatchImagesO1key
 from .seedance_video import Seedance, SeedanceMultiModal
-from .async_image_generation import AsyncImageGenerator, BatchAsyncImageGenerator
+from .nano_banana_v2 import NanoBananaV2, NanoBananaV2Batch, AsyncImageGenerator, BatchAsyncImageGenerator
 from .doubao_image import DoubaoImage
 from .gpt_image import O1keyGPTImage
 from .K_video import KVideo
@@ -26,4 +26,4 @@ from .K3_video import K3Video
 from .K3_video_firstlast import K3VideoFirstLast
 from .K3_motion_control import K3MotionControl, K3MotionVideoCheck
 
-__all__ = ['NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'MultiResPreview', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'KVideo', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator']
+__all__ = ['NanoBananaV2', 'NanoBananaV2Batch', 'NanoBananaPro', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'SaveCleanImage', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'MultiResPreview', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'KVideo', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator']

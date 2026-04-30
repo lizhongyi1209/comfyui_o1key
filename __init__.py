@@ -13,7 +13,7 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 import ssl
 
 from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, KVideo
-from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck, AsyncImageGenerator, BatchAsyncImageGenerator
+from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck, NanoBananaV2, NanoBananaV2Batch
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -47,8 +47,8 @@ def _wrap_generate_for_error_display(cls, attr="generate"):
 
 _wrap_generate_for_error_display(NanoBananaPro)
 _wrap_generate_for_error_display(BatchNanoBananaPro)
-_wrap_generate_for_error_display(AsyncImageGenerator)
-_wrap_generate_for_error_display(BatchAsyncImageGenerator)
+_wrap_generate_for_error_display(NanoBananaV2)
+_wrap_generate_for_error_display(NanoBananaV2Batch)
 
 # ComfyUI 节点注册
 NODE_CLASS_MAPPINGS = {
@@ -79,8 +79,8 @@ NODE_CLASS_MAPPINGS = {
     "K3VideoFirstLast": K3VideoFirstLast,
     "K3MotionControl": K3MotionControl,
     "K3MotionVideoCheck": K3MotionVideoCheck,
-    "AsyncImageGenerator": AsyncImageGenerator,
-    "BatchAsyncImageGenerator": BatchAsyncImageGenerator,
+    "NanoBananaV2": NanoBananaV2,
+    "NanoBananaV2Batch": NanoBananaV2Batch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -111,8 +111,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "K3VideoFirstLast": "首尾帧 K3 自研",
     "K3MotionControl": "动作控制 K3 自研",
     "K3MotionVideoCheck": "视频时长检测 K3",
-    "AsyncImageGenerator": "AI生图",
-    "BatchAsyncImageGenerator": "AI生图（批量版）",
+    "NanoBananaV2": "Nano Banana V2",
+    "NanoBananaV2Batch": "Nano Banana V2（批量）",
 }
 
 WEB_DIRECTORY = "./web"

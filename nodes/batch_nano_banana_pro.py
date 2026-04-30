@@ -790,7 +790,7 @@ class BatchNanoBananaPro:
             
             # 校验图片搜索（联网）与模型的兼容性
             # 仅 nano-banana-2-限时特价 和 gemini-3.1-flash-image-preview 支持图片搜索
-            IMAGE_SEARCH_UNSUPPORTED_MODELS = ["nano-banana-pro-限时特价", "nano-banana-pro-官方计费", "gemini-3-pro-image-preview"]
+            IMAGE_SEARCH_UNSUPPORTED_MODELS = ["nano-banana-pro-次卡", "nano-banana-pro-官方计费", "gemini-3-pro-image-preview"]
             if enable_image_search and 模型 in IMAGE_SEARCH_UNSUPPORTED_MODELS:
                 raise ValueError(
                     f"模型 \"{模型}\" 不支持【图片搜索（联网）】功能！"

@@ -93,31 +93,6 @@ GEMINI_MODELS = [
         ],
         "supported_resolutions": ["512px", "1K", "2K", "4K"]
     },
-    {
-        "id": "nano-banana-pro-官方",
-        "description": "Nano Banana Pro 官方，固定端点，适用于常规图像生成",
-        "enabled": True,
-        "provider": "gemini_async",
-        "endpoint_type": "standard",
-        "endpoint": "/v1beta/models/gemini-3-pro-image-preview:generateContent",
-        "supported_aspect_ratios": [
-            "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
-        ],
-        "supported_resolutions": ["1K", "2K", "4K"]
-    },
-    {
-        "id": "nano-banana-2-官方",
-        "description": "Nano Banana 2 官方，固定端点，快速图像生成模型",
-        "enabled": True,
-        "provider": "gemini_async",
-        "endpoint_type": "standard",
-        "endpoint": "/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
-        "supported_aspect_ratios": [
-            "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4",
-            "8:1", "9:16", "16:9", "21:9"
-        ],
-        "supported_resolutions": ["512px", "1K", "2K", "4K"]
-    }
 ]
 
 

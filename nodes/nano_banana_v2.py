@@ -11,7 +11,6 @@ ComfyUI 自定义节点，通过异步提交+轮询模式调用多种生图模�
 
 import os
 import time
-import math
 import random
 import asyncio
 import aiohttp
@@ -30,6 +29,7 @@ import numpy as np
 from PIL import Image
 
 from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts
+from ..utils.file_utils import load_images_from_folder, pair_images_by_name, pair_images_cartesian
 from ..utils.config import get_api_key_or_raise
 from ..models_config import (
     get_enabled_async_models,
@@ -60,11 +60,10 @@ except ImportError:
     MEMORY_MONITOR_AVAILABLE = False
 
 DEBUG_LOG_ENABLED = False
-REQUEST_LOG_ENABLED = True
+REQUEST_LOG_ENABLED = False
 
 _POLL_INTERVAL = 2      # 轮询间隔（秒）
 _MAX_WAIT_TIME = 900     # 单任务最大等待时间（秒）
-_MAX_CONCURRENT = 50     # 最大并发提交数
 
 
 def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.Tensor:
@@ -87,7 +86,7 @@ def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.
     return pil_to_tensor(matched)
 
 
-class AsyncImageGenerator:
+class NanoBananaV2:
     """
     异步生图节点（通用）
 
@@ -97,7 +96,7 @@ class AsyncImageGenerator:
       - 支持批量提示词、多参考图、代理端口
     """
 
-    NODE_LABEL = "AI生图"
+    NODE_LABEL = "Nano Banana V2"
 
     # Provider 注册表：provider 名称 → 类路径
     PROVIDER_CLASSES = {
@@ -117,8 +116,7 @@ class AsyncImageGenerator:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # 模型列表（排除官方计费渠道）
-        models = [m for m in get_enabled_async_models() if "官方计费" not in m]
+        models = get_enabled_async_models()
         if not models:
             models = ["请在 models_config.py 中启用至少一个异步模型"]
 
@@ -150,6 +148,12 @@ class AsyncImageGenerator:
             "max": 0xffffffffffffffff
         })
 
+        optional["分组令牌"] = ("STRING", {
+            "default": "",
+            "multiline": False,
+            "placeholder": "手动填写分组令牌将覆盖 .config 中的默认令牌"
+        })
+
         optional["代理端口"] = ("STRING", {
             "default": "",
             "multiline": False,
@@ -168,7 +172,7 @@ class AsyncImageGenerator:
                 "生图数量": ("INT", {
                     "default": 1,
                     "min": 1,
-                    "max": 1000,
+                    "max": 9,
                     "step": 1
                 })
             },
@@ -185,8 +189,11 @@ class AsyncImageGenerator:
     # Provider 工厂
     # ========================================================================
 
-    def _get_provider(self, model_id: str, proxy_url: Optional[str] = None) -> BaseAsyncImageProvider:
-        """根据模型 ID 获取或创建对应的 Provider 实例"""
+    def _get_provider(self, model_id: str, proxy_url: Optional[str] = None, api_key_override: Optional[str] = None) -> BaseAsyncImageProvider:
+        """根据模型 ID 获取或创建对应的 Provider 实例
+
+        api_key_override: 手动填写的分组令牌，非空时优先使用，空则回退到 .config
+        """
         provider_name = get_model_provider(model_id)
         if not provider_name:
             raise ValueError(f"模型 \"{model_id}\" 不支持异步模式")
@@ -210,7 +217,9 @@ class AsyncImageGenerator:
             module = importlib.import_module(module_path)
         provider_class = getattr(module, class_name)
 
-        api_key = get_api_key_or_raise("O1KEY_API_KEY")
+        api_key = api_key_override.strip() if api_key_override else ""
+        if not api_key:
+            api_key = get_api_key_or_raise("O1KEY_API_KEY")
         self._provider = provider_class(api_key=api_key, proxy_url=proxy_url)
         self._provider_name = provider_name
         return self._provider
@@ -413,7 +422,7 @@ class AsyncImageGenerator:
         pbar=None,
         **extra_kwargs,
     ) -> List[dict]:
-        """异步批量处理"""
+        """全并发处理（V2 节点最多 9 个任务，无需分批）"""
         # 构建任务定义
         tasks_def = []
         for p_idx, prompt in enumerate(prompts):
@@ -421,7 +430,6 @@ class AsyncImageGenerator:
                 tasks_def.append((p_idx, sub_idx, prompt))
 
         total_tasks = len(tasks_def)
-        num_batches = math.ceil(total_tasks / _MAX_CONCURRENT)
         all_results: List[dict] = []
         completed = 0
 
@@ -431,68 +439,57 @@ class AsyncImageGenerator:
         connector = aiohttp.TCPConnector(ssl=False, limit=0, limit_per_host=0)
 
         async with aiohttp.ClientSession(connector=connector) as session:
-            for batch_idx in range(num_batches):
-                self._check_interrupt()
-
-                start_idx = batch_idx * _MAX_CONCURRENT
-                end_idx = min(start_idx + _MAX_CONCURRENT, total_tasks)
-
-                batch_tasks = []
-                for i in range(start_idx, end_idx):
-                    _, _, prompt = tasks_def[i]
-
-                    task = asyncio.create_task(
-                        self._execute_one(
-                            session=session,
-                            provider=provider,
-                            prompt=prompt,
-                            model=model,
-                            resolution=resolution,
-                            aspect_ratio=aspect_ratio,
-                            input_images=input_images,
-                            global_task_index=i,
-                            on_progress=_on_progress,
-                            **extra_kwargs,
-                        )
+            # 一次性全并发提交
+            batch_tasks = []
+            for i, (_, _, prompt) in enumerate(tasks_def):
+                task = asyncio.create_task(
+                    self._execute_one(
+                        session=session,
+                        provider=provider,
+                        prompt=prompt,
+                        model=model,
+                        resolution=resolution,
+                        aspect_ratio=aspect_ratio,
+                        input_images=input_images,
+                        global_task_index=i,
+                        on_progress=_on_progress,
+                        **extra_kwargs,
                     )
-                    batch_tasks.append(task)
+                )
+                batch_tasks.append(task)
 
-                batch_results = []
-                for coro in asyncio.as_completed(batch_tasks):
-                    result_data = None
-                    try:
-                        result_data = await coro
-                    except InterruptProcessingException:
-                        # 用户取消：终止所有未完成任务
-                        for t in batch_tasks:
-                            t.cancel()
-                        raise
-                    except Exception as e2:
-                        # 意外错误（不应发生，_execute_one 内部已捕获常规异常）
-                        result_data = {
-                            "success": False,
-                            "error": str(e2),
-                            "generated_count": 0,
-                            "output_images": [],
-                            "prompt": "",
-                        }
+            for coro in asyncio.as_completed(batch_tasks):
+                result_data = None
+                try:
+                    result_data = await coro
+                except InterruptProcessingException:
+                    # 用户取消：终止所有未完成任务
+                    for t in batch_tasks:
+                        t.cancel()
+                    raise
+                except Exception as e2:
+                    # 意外错误（不应发生，_execute_one 内部已捕获常规异常）
+                    result_data = {
+                        "success": False,
+                        "error": str(e2),
+                        "generated_count": 0,
+                        "output_images": [],
+                        "prompt": "",
+                    }
 
-                    batch_results.append(result_data)
-                    completed += 1
+                all_results.append(result_data)
+                completed += 1
 
-                    prompt_snippet = (result_data.get("prompt", "") or "")[:30]
-                    if result_data and result_data.get("success"):
-                        count = result_data.get("generated_count", 1)
-                        print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> OK({count}张)")
-                    else:
-                        error_msg = result_data.get("error", "未知错误") if result_data else "未知错误"
-                        print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> FAIL: {error_msg}")
+                prompt_snippet = (result_data.get("prompt", "") or "").replace("\n", " ")[:30]
+                if result_data and result_data.get("success"):
+                    count = result_data.get("generated_count", 1)
+                    print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> OK({count}张)")
+                else:
+                    error_msg = result_data.get("error", "未知错误") if result_data else "未知错误"
+                    print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> FAIL: {error_msg}")
 
-                all_results.extend(batch_results)
-
-                import gc
-                gc.collect()
-                await asyncio.sleep(0.1)
+            import gc
+            gc.collect()
 
         return all_results
 
@@ -515,10 +512,11 @@ class AsyncImageGenerator:
         # 提取通用可选参数
         seed: int = kwargs.pop("seed", 0)
         proxy_port: str = kwargs.pop("代理端口", "")
+        api_key_override: str = kwargs.pop("分组令牌", "")
 
         # 初始化 Provider
         proxy_url = BaseAsyncImageProvider.build_proxy_url(proxy_port)
-        provider = self._get_provider(模型, proxy_url=proxy_url)
+        provider = self._get_provider(模型, proxy_url=proxy_url, api_key_override=api_key_override)
 
         if proxy_url:
             print(f"{self.NODE_LABEL}: 已启用代理加速 -> {proxy_url}")
@@ -578,13 +576,10 @@ class AsyncImageGenerator:
             images_per_prompt = 生图数量
             total_tasks = 生图数量
 
-            if total_tasks > 100:
-                print(f"  {self.NODE_LABEL}: 警告！批量生成 {total_tasks} 张图片，内存占用可能较高")
-
             if pbar is not None:
                 pbar = ProgressBar(total_tasks)
 
-            # 在独立线程中运行异步批量处理
+            # 在独立线程中运行异步全并发处理
             def run_async():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -607,30 +602,26 @@ class AsyncImageGenerator:
 
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(run_async)
-                # 总超时 = 批次数 × 单任务超时，保证每批都有完整的时间窗口
-                num_batches = math.ceil(total_tasks / _MAX_CONCURRENT)
-                batch_timeout = num_batches * _MAX_WAIT_TIME
                 try:
-                    results = future.result(timeout=batch_timeout)
+                    results = future.result(timeout=_MAX_WAIT_TIME)
                 except TimeoutError:
-                    raise RuntimeError(f"任务执行超时（{batch_timeout}秒），请减少数量或检查网络")
+                    raise RuntimeError(f"任务执行超时（{_MAX_WAIT_TIME}秒），请减少数量或检查网络")
 
             # 统计结果
-            success_count = sum(1 for r in results if r.get("success"))
-            fail_count = len(results) - success_count
-
             elapsed = time.time() - start_time
             time_str = f"{elapsed:.3f}s" if elapsed < 1 else f"{elapsed:.2f}s"
-            print(f"{self.NODE_LABEL}: 完成！总耗时 {time_str} | 成功: {success_count}/{total_tasks} | 失败: {fail_count}")
 
-            # 打印失败详情
             failed = [r for r in results if not r.get("success")]
             if failed:
+                reason = failed[0].get("error", "未知错误")
+                print(f"{self.NODE_LABEL}: 失败！原因：{reason}")
                 for fr in failed:
                     idx = fr.get("global_task_index", -1) + 1
-                    prompt_snippet = (fr.get("prompt", "") or "")[:30]
+                    prompt_snippet = (fr.get("prompt", "") or "").replace("\n", " ")[:30]
                     error_msg = fr.get("error", "未知错误")
                     print(f"  FAIL #{idx}: {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> {error_msg}")
+            else:
+                print(f"{self.NODE_LABEL}: 完成！总耗时 {time_str}")
 
             # 收集输出图像
             output_images = []
@@ -641,10 +632,10 @@ class AsyncImageGenerator:
                 # 收集所有错误原因
                 error_details = "\n".join(
                     f"  - {r.get('prompt', '未知提示词')[:40]}: {r.get('error', '未知错误')}"
-                    for r in results if not r.get("success")
+                    for r in failed
                 )
                 raise RuntimeError(
-                    f"所有任务均失败 ({fail_count}/{total_tasks})：\n{error_details}"
+                    f"所有任务均失败 ({len(failed)}/{len(results)})：\n{error_details}"
                 )
 
             output_tensor = _images_to_tensor_safe(output_images, self.NODE_LABEL)
@@ -681,9 +672,9 @@ class AsyncImageGenerator:
             gc.collect()
 
 
-class BatchAsyncImageGenerator(AsyncImageGenerator):
+class NanoBananaV2Batch(NanoBananaV2):
     """
-    AI生图（批量版）- 全并发提交 + 即时落盘
+    Nano Banana V2（批量）- 全并发提交 + 即时落盘
 
     与原版区别：
       - 所有任务一次性全并发提交，不分批次
@@ -691,8 +682,34 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
       - 最终从磁盘加载所有已保存的图像输出
     """
 
-    NODE_LABEL = "AI生图（批量版）"
+    NODE_LABEL = "Nano Banana V2（批量）"
     RETURN_NAMES = ("输出图像",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        types = super().INPUT_TYPES()
+
+        # 批量专用：文件夹图片路径
+        for i in range(1, 6):
+            types["optional"][f"图片路径（图{i}）"] = ("STRING", {
+                "default": "",
+                "multiline": False,
+                "placeholder": f"填写后将加载文件夹中的图片作为第{i}组参考图"
+            })
+
+        types["optional"]["图片配对模式"] = (["不配对", "按相同图片命名", "1*N"], {
+            "default": "不配对"
+        })
+
+        # 批量版恢复较大的生图数量上限
+        types["required"]["生图数量"] = ("INT", {
+            "default": 1,
+            "min": 1,
+            "max": 1000,
+            "step": 1
+        })
+
+        return types
 
     def __init__(self):
         super().__init__()
@@ -720,9 +737,13 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
         images_per_prompt: int,
         input_images: List[Image.Image],
         pbar=None,
+        per_task_images: Optional[List[List[Image.Image]]] = None,
         **extra_kwargs,
     ) -> List[dict]:
-        """全并发处理：所有任务一次性提交，谁先完成谁先落盘"""
+        """全并发处理：所有任务一次性提交，谁先完成谁先落盘
+
+        per_task_images: 可选，每个任务专属的图片列表，与 input_images 合并
+        """
         # 构建任务定义
         tasks_def = []
         for p_idx, prompt in enumerate(prompts):
@@ -746,6 +767,9 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
             # 一次性提交所有任务（全并发）
             batch_tasks = []
             for i, (_, _, prompt) in enumerate(tasks_def):
+                task_imgs = list(input_images)
+                if per_task_images and i < len(per_task_images) and per_task_images[i]:
+                    task_imgs = per_task_images[i] + task_imgs
                 task = asyncio.create_task(
                     self._execute_one(
                         session=session,
@@ -754,7 +778,7 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
                         model=model,
                         resolution=resolution,
                         aspect_ratio=aspect_ratio,
-                        input_images=input_images,
+                        input_images=task_imgs,
                         global_task_index=i,
                         on_progress=_on_progress,
                         **extra_kwargs,
@@ -796,7 +820,7 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
                 all_results.append(result_data)
                 completed += 1
 
-                prompt_snippet = (result_data.get("prompt", "") or "")[:30]
+                prompt_snippet = (result_data.get("prompt", "") or "").replace("\n", " ")[:30]
                 if result_data and result_data.get("success"):
                     count = result_data.get("saved_count", result_data.get("generated_count", 1))
                     print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> OK({count}张) [已落盘]")
@@ -823,9 +847,10 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
 
         seed: int = kwargs.pop("seed", 0)
         proxy_port: str = kwargs.pop("代理端口", "")
+        api_key_override: str = kwargs.pop("分组令牌", "")
 
         proxy_url = BaseAsyncImageProvider.build_proxy_url(proxy_port)
-        provider = self._get_provider(模型, proxy_url=proxy_url)
+        provider = self._get_provider(模型, proxy_url=proxy_url, api_key_override=api_key_override)
 
         if proxy_url:
             print(f"{self.NODE_LABEL}: 已启用代理加速 -> {proxy_url}")
@@ -859,6 +884,7 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
                     f"该模型支持的宽高比：{', '.join(supported_ratios)}"
                 )
 
+            # 收集参考图
             input_images = []
             for i in range(1, 10):
                 key = f"参考图{i}"
@@ -869,24 +895,80 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
             if input_images and len(input_images) > 14:
                 raise ValueError(f"输入图像数量 {len(input_images)} 超过限制 14 张")
 
-            batch_prompts = parse_batch_prompts(prompt)
+            # 加载文件夹图片
+            folder_paths = []
+            for i in range(1, 6):
+                fp = kwargs.pop(f"图片路径（图{i}）", "").strip()
+                if fp:
+                    folder_paths.append(fp)
 
-            if batch_prompts:
-                num_prompts = len(batch_prompts)
-                total_images = num_prompts * 生图数量
-                mode_str = f"批量提示词模式 ({num_prompts}个提示词)"
-                if input_images:
-                    mode_str += f" (输入{len(input_images)}张)"
-                print(f"{self.NODE_LABEL}: {mode_str} | {分辨率} {宽高比} | 共{total_images}张")
-                prompts_list = batch_prompts
-                images_per_prompt = 生图数量
-                total_tasks = total_images
-            else:
-                mode_str = f"图生图模式 (输入{len(input_images)}张)" if input_images else "文生图模式"
-                print(f"{self.NODE_LABEL}: {mode_str} | {分辨率} {宽高比} | {生图数量}张")
-                prompts_list = [prompt]
-                images_per_prompt = 生图数量
-                total_tasks = 生图数量
+            pairing_mode = kwargs.pop("图片配对模式", "不配对")
+            per_task_images = None
+            if folder_paths:
+                # 按文件夹分组加载
+                folder_image_lists = []  # List[List[ImageInfo]]
+                for fp in folder_paths:
+                    try:
+                        infos = load_images_from_folder(fp)
+                        if infos:
+                            folder_image_lists.append(infos)
+                    except ValueError as e:
+                        print(f"{self.NODE_LABEL}: {e}")
+
+                if folder_image_lists:
+                    # 根据配对模式生成配对
+                    if pairing_mode == "不配对":
+                        if len(folder_image_lists) > 1:
+                            raise ValueError("「不配对」模式只支持单个文件夹，请清空其他文件夹路径")
+                        pairs = [(info,) for info in folder_image_lists[0]]
+                    elif pairing_mode == "按相同图片命名":
+                        pairs = list(pair_images_by_name(*folder_image_lists))
+                    else:  # 1*N
+                        pairs = list(pair_images_cartesian(*folder_image_lists))
+
+                    if pairs:
+                        batch_prompts = parse_batch_prompts(prompt)
+                        per_task_images = []
+                        prompts_list = []
+                        for pair in pairs:
+                            task_imgs = [info.image for info in pair] + list(input_images)
+                            if batch_prompts:
+                                for bp in batch_prompts:
+                                    per_task_images.append(list(task_imgs))
+                                    prompts_list.append(bp)
+                            else:
+                                per_task_images.append(list(task_imgs))
+                                prompts_list.append(prompt)
+
+                        images_per_prompt = 1
+                        total_tasks = len(prompts_list)
+                        folder_count = len(folder_paths)
+                        total_folder_imgs = sum(len(lst) for lst in folder_image_lists)
+                        mode_str = f"文件夹批量模式 ({pairing_mode}, {folder_count}个文件夹, {total_folder_imgs}张图片→{len(pairs)}组)"
+                        if batch_prompts:
+                            mode_str += f" × {len(batch_prompts)}个提示词"
+                        if input_images:
+                            mode_str += f" (+{len(input_images)}张参考图)"
+                        print(f"{self.NODE_LABEL}: {mode_str} | {分辨率} {宽高比} | 共{total_tasks}张")
+
+            if per_task_images is None:
+                batch_prompts = parse_batch_prompts(prompt)
+                if batch_prompts:
+                    num_prompts = len(batch_prompts)
+                    total_images = num_prompts * 生图数量
+                    mode_str = f"批量提示词模式 ({num_prompts}个提示词)"
+                    if input_images:
+                        mode_str += f" (输入{len(input_images)}张)"
+                    print(f"{self.NODE_LABEL}: {mode_str} | {分辨率} {宽高比} | 共{total_images}张")
+                    prompts_list = batch_prompts
+                    images_per_prompt = 生图数量
+                    total_tasks = total_images
+                else:
+                    mode_str = f"图生图模式 (输入{len(input_images)}张)" if input_images else "文生图模式"
+                    print(f"{self.NODE_LABEL}: {mode_str} | {分辨率} {宽高比} | {生图数量}张")
+                    prompts_list = [prompt]
+                    images_per_prompt = 生图数量
+                    total_tasks = 生图数量
 
             if total_tasks > 100:
                 print(f"  {self.NODE_LABEL}: 全并发模式，{total_tasks} 张图片将同时提交")
@@ -908,6 +990,7 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
                             images_per_prompt=images_per_prompt,
                             input_images=input_images,
                             pbar=pbar,
+                            per_task_images=per_task_images,
                             **extra_kwargs,
                         )
                     )
@@ -927,7 +1010,9 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
 
             elapsed = time.time() - start_time
             time_str = f"{elapsed:.3f}s" if elapsed < 1 else f"{elapsed:.2f}s"
-            print(f"{self.NODE_LABEL}: 完成！总耗时 {time_str} | 成功: {success_count}/{total_tasks} | 失败: {fail_count} | 已落盘: {len(self._output_file_paths)} 张")
+            avg_time = elapsed / success_count if success_count > 0 else 0
+            avg_str = f"{avg_time:.2f}s/张" if avg_time >= 1 else f"{avg_time:.3f}s/张"
+            print(f"{self.NODE_LABEL}: 完成！总耗时 {time_str} ({avg_str}) | 成功: {success_count}/{total_tasks} | 失败: {fail_count} | 已落盘: {len(self._output_file_paths)} 张")
 
             failed = [r for r in results if not r.get("success")]
             if failed:
@@ -990,3 +1075,8 @@ class BatchAsyncImageGenerator(AsyncImageGenerator):
 
             import gc
             gc.collect()
+
+
+# 向后兼容别名（旧工作流中使用旧类名仍可正常加载）
+AsyncImageGenerator = NanoBananaV2
+BatchAsyncImageGenerator = NanoBananaV2Batch
