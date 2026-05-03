@@ -198,9 +198,14 @@ class NanoBananaV2:
         if not provider_name:
             raise ValueError(f"模型 \"{model_id}\" 不支持异步模式")
 
-        # 同类型 Provider 复用，只更新代理
+        # 同类型 Provider 复用，更新代理和 API 密钥
         if self._provider is not None and self._provider_name == provider_name:
             self._provider.proxy_url = proxy_url
+            # 根据当前 api_key_override 重新计算应使用的密钥
+            api_key = api_key_override.strip() if api_key_override else ""
+            if not api_key:
+                api_key = get_api_key_or_raise("O1KEY_API_KEY")
+            self._provider.api_key = api_key
             return self._provider
 
         # 创建新 Provider
@@ -283,6 +288,8 @@ class NanoBananaV2:
         async with session.post(url, json=request_body, headers=headers, proxy=provider.proxy_url) as response:
             if response.status != 200:
                 error_text = await response.text()
+                if not error_text.strip():
+                    error_text = "(服务器未返回错误详情)"
                 raise RuntimeError(f"提交任务失败 ({response.status}): {error_text}")
             data = await response.json()
 
@@ -320,6 +327,8 @@ class NanoBananaV2:
             async with session.get(url, headers=headers, proxy=provider.proxy_url) as response:
                 if response.status != 200:
                     error_text = await response.text()
+                    if not error_text.strip():
+                        error_text = "(服务器未返回错误详情)"
                     raise RuntimeError(f"查询任务失败 ({response.status}): {error_text}")
 
                 result = await response.json()
@@ -345,7 +354,10 @@ class NanoBananaV2:
                         on_progress(1.0 - last_progress)
                     return result.get("data", {})
                 elif status == "FAILURE":
-                    error_msg = result.get("error", "未知错误")
+                    error_msg = result.get("error") or "未知错误"
+                    if error_msg == "未知错误":
+                        import json
+                        print(f"{self.NODE_LABEL}: [轮询] FAILURE 但无错误信息，原始响应: {json.dumps(result, ensure_ascii=False)[:500]}")
                     friendly_msg = self._friendly_error(error_msg)
                     raise RuntimeError(f"任务失败: {friendly_msg}")
                 elif status in ("SUBMITTED", "IN_PROGRESS"):
@@ -403,7 +415,7 @@ class NanoBananaV2:
                 on_progress(1.0 - contributed[0])
             raise
         except Exception as e:
-            result["error"] = str(e)
+            result["error"] = str(e) or f"{type(e).__name__}(无错误详情)"
             # 失败也补齐 1.0 进度，保证进度条总数正确
             if contributed[0] < 1.0 and on_progress:
                 on_progress(1.0 - contributed[0])
@@ -485,7 +497,7 @@ class NanoBananaV2:
                     count = result_data.get("generated_count", 1)
                     print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> OK({count}张)")
                 else:
-                    error_msg = result_data.get("error", "未知错误") if result_data else "未知错误"
+                    error_msg = (result_data.get("error") or "未知错误") if result_data else "未知错误"
                     print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> FAIL: {error_msg}")
 
             import gc
@@ -613,12 +625,12 @@ class NanoBananaV2:
 
             failed = [r for r in results if not r.get("success")]
             if failed:
-                reason = failed[0].get("error", "未知错误")
+                reason = failed[0].get("error") or "未知错误"
                 print(f"{self.NODE_LABEL}: 失败！原因：{reason}")
                 for fr in failed:
                     idx = fr.get("global_task_index", -1) + 1
                     prompt_snippet = (fr.get("prompt", "") or "").replace("\n", " ")[:30]
-                    error_msg = fr.get("error", "未知错误")
+                    error_msg = fr.get("error") or "未知错误"
                     print(f"  FAIL #{idx}: {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> {error_msg}")
             else:
                 print(f"{self.NODE_LABEL}: 完成！总耗时 {time_str}")
@@ -631,7 +643,7 @@ class NanoBananaV2:
             if not output_images:
                 # 收集所有错误原因
                 error_details = "\n".join(
-                    f"  - {r.get('prompt', '未知提示词')[:40]}: {r.get('error', '未知错误')}"
+                    f"  - {r.get('prompt', '未知提示词')[:40]}: {r.get('error') or '未知错误'}"
                     for r in failed
                 )
                 raise RuntimeError(
@@ -825,7 +837,7 @@ class NanoBananaV2Batch(NanoBananaV2):
                     count = result_data.get("saved_count", result_data.get("generated_count", 1))
                     print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> OK({count}张) [已落盘]")
                 else:
-                    error_msg = result_data.get("error", "未知错误") if result_data else "未知错误"
+                    error_msg = (result_data.get("error") or "未知错误") if result_data else "未知错误"
                     print(f"{self.NODE_LABEL}: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> FAIL: {error_msg}")
 
             import gc
@@ -1019,7 +1031,7 @@ class NanoBananaV2Batch(NanoBananaV2):
                 for fr in failed:
                     idx = fr.get("global_task_index", -1) + 1
                     prompt_snippet = (fr.get("prompt", "") or "")[:30]
-                    error_msg = fr.get("error", "未知错误")
+                    error_msg = fr.get("error") or "未知错误"
                     print(f"  FAIL #{idx}: {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> {error_msg}")
 
             # 从磁盘加载已保存的图像
@@ -1033,7 +1045,7 @@ class NanoBananaV2Batch(NanoBananaV2):
 
             if not output_images:
                 error_details = "\n".join(
-                    f"  - {r.get('prompt', '未知提示词')[:40]}: {r.get('error', '未知错误')}"
+                    f"  - {r.get('prompt', '未知提示词')[:40]}: {r.get('error') or '未知错误'}"
                     for r in results if not r.get("success")
                 )
                 raise RuntimeError(
