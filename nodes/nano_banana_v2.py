@@ -245,6 +245,13 @@ class NanoBananaV2:
         return error_msg
 
     @staticmethod
+    def _apply_image_format(img: Image.Image, image_format: str) -> Image.Image:
+        """按指定格式处理图像：JPEG 时转 RGB（质量100不压缩），PNG 不做处理"""
+        if image_format == "JPEG" and img.mode in ("RGBA", "LA", "P"):
+            return img.convert("RGB")
+        return img
+
+    @staticmethod
     def _check_interrupt():
         """检查 ComfyUI 是否点击了取消按钮，是则抛出 InterruptProcessingException"""
         if INTERRUPT_AVAILABLE and processing_interrupted():
@@ -701,20 +708,69 @@ class NanoBananaV2Batch(NanoBananaV2):
     def INPUT_TYPES(cls):
         types = super().INPUT_TYPES()
 
-        # 批量专用：文件夹图片路径
+        # 按指定顺序重建 optional
+        new_optional = {}
+
+        # 1. 联网功能（Provider 专有参数）
+        for provider_extra in cls._PROVIDER_EXTRA_INPUTS.values():
+            for k, v in provider_extra.items():
+                if k in types["optional"]:
+                    new_optional[k] = types["optional"][k]
+
+        # 2. 图片格式
+        new_optional["图片格式"] = (["PNG", "JPEG"], {"default": "JPEG"})
+
+        # 3. seed
+        if "seed" in types["optional"]:
+            new_optional["seed"] = types["optional"]["seed"]
+
+        # 4. 图片配对模式
+        new_optional["图片配对模式"] = (["不配对", "按相同图片命名", "1*N"], {
+            "default": "不配对"
+        })
+
+        # 5. 图片命名规则
+        new_optional["图片命名规则"] = (["和图片同名", "1,2,3,4..."], {
+            "default": "和图片同名"
+        })
+
+        # 6. 图片保存路径（可选）
+        new_optional["图片保存路径（可选）"] = ("STRING", {
+            "default": "",
+            "multiline": False,
+            "placeholder": "留空默认保存到 ComfyUI/output；填写则保存到指定路径"
+        })
+
+        # 7. 图片路径（图1-5）
         for i in range(1, 6):
-            types["optional"][f"图片路径（图{i}）"] = ("STRING", {
+            new_optional[f"图片路径（图{i}）"] = ("STRING", {
                 "default": "",
                 "multiline": False,
                 "placeholder": f"填写后将加载文件夹中的图片作为第{i}组参考图"
             })
 
-        types["optional"]["图片配对模式"] = (["不配对", "按相同图片命名", "1*N"], {
-            "default": "不配对"
-        })
+        # 8. 分组令牌
+        if "分组令牌" in types["optional"]:
+            new_optional["分组令牌"] = types["optional"]["分组令牌"]
 
-        # 批量版恢复较大的生图数量上限
-        types["required"]["生图数量"] = ("INT", {
+        # 9. 代理端口
+        if "代理端口" in types["optional"]:
+            new_optional["代理端口"] = types["optional"]["代理端口"]
+
+        # 保留参考图1-9
+        for i in range(1, 10):
+            key = f"参考图{i}"
+            if key in types["optional"]:
+                new_optional[key] = types["optional"][key]
+
+        types["optional"] = new_optional
+
+        # 批量版隐藏生图数量参数，固定为1
+        if "生图数量" in types["required"]:
+            del types["required"]["生图数量"]
+        if "hidden" not in types:
+            types["hidden"] = {}
+        types["hidden"]["生图数量"] = ("INT", {
             "default": 1,
             "min": 1,
             "max": 1000,
@@ -748,13 +804,18 @@ class NanoBananaV2Batch(NanoBananaV2):
         aspect_ratio: str,
         images_per_prompt: int,
         input_images: List[Image.Image],
+        image_format: str = "JPEG",
+        save_path: str = "",
+        save_naming: str = "{src}_{sub}.png",
         pbar=None,
         per_task_images: Optional[List[List[Image.Image]]] = None,
+        per_task_names: Optional[List[str]] = None,
         **extra_kwargs,
     ) -> List[dict]:
         """全并发处理：所有任务一次性提交，谁先完成谁先落盘
 
         per_task_images: 可选，每个任务专属的图片列表，与 input_images 合并
+        per_task_names: 可选，每个任务的源文件名列表，用于命名时保持与输入图片一致
         """
         # 构建任务定义
         tasks_def = []
@@ -768,7 +829,11 @@ class NanoBananaV2Batch(NanoBananaV2):
 
         # 初始化输出目录
         self._output_file_paths = []
-        self._output_dir = self._get_output_dir()
+        if save_path:
+            self._output_dir = save_path
+        else:
+            self._output_dir = self._get_output_dir()
+        os.makedirs(self._output_dir, exist_ok=True)
         print(f"{self.NODE_LABEL}: 输出目录: {self._output_dir}")
 
         _on_progress = (lambda delta: pbar.update(delta)) if pbar is not None else None
@@ -816,14 +881,45 @@ class NanoBananaV2Batch(NanoBananaV2):
                         "prompt": "",
                     }
 
-                # 即时落盘
+                # 即时落盘（应用图片格式转换 + 自定义命名规则）
                 if result_data and result_data.get("success"):
+                    ext = "jpg" if image_format == "JPEG" else "png"
+                    # 源文件名（优先使用输入图片名，保持命名一致）
+                    task_idx = result_data.get("global_task_index", completed)
+                    source_name = ""
+                    if per_task_names and task_idx < len(per_task_names):
+                        source_name = per_task_names[task_idx]
+                    prompt_snippet = (result_data.get("prompt", "") or "").replace("\n", " ")[:20]
+                    prompt_sanitized = "".join(c for c in prompt_snippet if c.isalnum() or c in "._- ")
+                    time_str = time.strftime("%Y%m%d_%H%M%S")
                     for img_idx, img in enumerate(result_data.get("output_images", [])):
-                        filepath = os.path.join(
-                            self._output_dir,
-                            f"task_{completed:04d}_{img_idx:02d}.png"
-                        )
-                        img.save(filepath)
+                        img = self._apply_image_format(img, image_format)
+                        # 构建文件名
+                        filename = save_naming
+                        filename = filename.replace("{src}", source_name)
+                        filename = filename.replace("{index}", str(task_idx))
+                        filename = filename.replace("{i}", str(task_idx))
+                        filename = filename.replace("{num}", str(task_idx + 1))
+                        filename = filename.replace("{n}", str(task_idx + 1))
+                        filename = filename.replace("{sub}", str(img_idx))
+                        filename = filename.replace("{prompt}", prompt_sanitized)
+                        filename = filename.replace("{time}", time_str)
+                        # 确保扩展名正确
+                        if not filename.lower().endswith(f".{ext}"):
+                            base, _ = os.path.splitext(filename)
+                            filename = f"{base}.{ext}"
+                        # 防覆盖
+                        filepath = os.path.join(self._output_dir, filename)
+                        if os.path.exists(filepath):
+                            base, file_ext = os.path.splitext(filename)
+                            counter = 1
+                            while os.path.exists(filepath):
+                                filepath = os.path.join(self._output_dir, f"{base}_{counter}{file_ext}")
+                                counter += 1
+                        if image_format == "JPEG":
+                            img.save(filepath, "JPEG", quality=100)
+                        else:
+                            img.save(filepath)
                         self._output_file_paths.append(filepath)
                     # 释放内存中的图像对象
                     result_data["saved_count"] = len(result_data.get("output_images", []))
@@ -851,7 +947,7 @@ class NanoBananaV2Batch(NanoBananaV2):
         模型: str,
         宽高比: str,
         分辨率: str,
-        生图数量: int,
+        生图数量: int = 1,
         **kwargs
     ) -> Tuple[torch.Tensor]:
         """生成图像（异步模式 - 批量版：全并发 + 即时落盘）"""
@@ -860,6 +956,13 @@ class NanoBananaV2Batch(NanoBananaV2):
         seed: int = kwargs.pop("seed", 0)
         proxy_port: str = kwargs.pop("代理端口", "")
         api_key_override: str = kwargs.pop("分组令牌", "")
+        image_format: str = kwargs.pop("图片格式", "JPEG")
+        save_path: str = kwargs.pop("图片保存路径（可选）", "").strip()
+        命名规则选择: str = kwargs.pop("图片命名规则", "和图片同名")
+        if 命名规则选择 == "1,2,3,4...":
+            save_naming = "{num}.png"
+        else:
+            save_naming = "{src}_{sub}.png"
 
         proxy_url = BaseAsyncImageProvider.build_proxy_url(proxy_port)
         provider = self._get_provider(模型, proxy_url=proxy_url, api_key_override=api_key_override)
@@ -916,6 +1019,7 @@ class NanoBananaV2Batch(NanoBananaV2):
 
             pairing_mode = kwargs.pop("图片配对模式", "不配对")
             per_task_images = None
+            per_task_names = None
             if folder_paths:
                 # 按文件夹分组加载
                 folder_image_lists = []  # List[List[ImageInfo]]
@@ -941,15 +1045,20 @@ class NanoBananaV2Batch(NanoBananaV2):
                     if pairs:
                         batch_prompts = parse_batch_prompts(prompt)
                         per_task_images = []
+                        per_task_names = []
                         prompts_list = []
                         for pair in pairs:
                             task_imgs = [info.image for info in pair] + list(input_images)
+                            # 取第一张输入图的文件名作为源名，保持命名一致
+                            src_name = pair[0].filename if pair else ""
                             if batch_prompts:
                                 for bp in batch_prompts:
                                     per_task_images.append(list(task_imgs))
+                                    per_task_names.append(src_name)
                                     prompts_list.append(bp)
                             else:
                                 per_task_images.append(list(task_imgs))
+                                per_task_names.append(src_name)
                                 prompts_list.append(prompt)
 
                         images_per_prompt = 1
@@ -1001,8 +1110,12 @@ class NanoBananaV2Batch(NanoBananaV2):
                             aspect_ratio=宽高比,
                             images_per_prompt=images_per_prompt,
                             input_images=input_images,
+                            image_format=image_format,
+                            save_path=save_path,
+                            save_naming=save_naming,
                             pbar=pbar,
                             per_task_images=per_task_images,
+                            per_task_names=per_task_names,
                             **extra_kwargs,
                         )
                     )
