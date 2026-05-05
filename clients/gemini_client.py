@@ -186,6 +186,7 @@ class GeminiAPIClient(BaseAPIClient):
         resolution: str = "2K",
         enable_grounding: bool = False,
         enable_image_search: bool = False,
+        image_compression: str = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -281,6 +282,10 @@ class GeminiAPIClient(BaseAPIClient):
                 }
             }
         }
+
+        # 添加图片压缩参数
+        if image_compression:
+            request_body["image_compression"] = image_compression
 
         # 添加 Google Search Grounding 工具（如果启用）
         # 注意：enable_image_search=True 时会自动隐含 enable_grounding

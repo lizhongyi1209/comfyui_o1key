@@ -139,6 +139,8 @@ class NanoBananaV2:
         for provider_extra in cls._PROVIDER_EXTRA_INPUTS.values():
             optional.update(provider_extra)
 
+        optional["图片质量"] = (["日常", "高清"], {"default": "日常"})
+
         for i in range(1, 10):
             optional[f"参考图{i}"] = ("IMAGE",)
 
@@ -407,6 +409,7 @@ class NanoBananaV2:
                 on_progress(delta)
 
         try:
+            t_req_start = time.time()
             task_id = await self._submit_one(
                 session, provider, prompt, model,
                 resolution, aspect_ratio, input_images,
@@ -415,11 +418,17 @@ class NanoBananaV2:
             response_data = await self._poll_one(
                 session, provider, task_id, on_progress=_track_progress,
             )
+            request_time = time.time() - t_req_start
+
+            t_dl_start = time.time()
             images_list = await provider.parse_result(response_data, session)
+            download_time = time.time() - t_dl_start
 
             result["success"] = True
             result["generated_count"] = len(images_list)
             result["output_images"] = images_list
+            result["request_time"] = request_time
+            result["download_time"] = download_time
         except InterruptProcessingException:
             # 用户取消：补齐进度后向上传播，不吞掉
             if contributed[0] < 1.0 and on_progress:
@@ -536,10 +545,13 @@ class NanoBananaV2:
         seed: int = kwargs.pop("seed", 0)
         proxy_port: str = kwargs.pop("代理端口", "")
         api_key_override: str = kwargs.pop("分组令牌", "")
+        图片质量: str = kwargs.pop("图片质量", "日常")
+        image_format = "JPEG" if 图片质量 == "日常" else "PNG"
 
         # 初始化 Provider
         proxy_url = BaseAsyncImageProvider.build_proxy_url(proxy_port)
         provider = self._get_provider(模型, proxy_url=proxy_url, api_key_override=api_key_override)
+        provider.image_compression = "webp" if 图片质量 == "日常" else None
 
         if proxy_url:
             print(f"{self.NODE_LABEL}: 已启用代理加速 -> {proxy_url}")
@@ -644,7 +656,11 @@ class NanoBananaV2:
                     error_msg = fr.get("error") or "未知错误"
                     print(f"  FAIL #{idx}: {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} -> {error_msg}")
             else:
-                print(f"{self.NODE_LABEL}: 完成！总耗时 {time_str}")
+                total_request = sum(r.get("request_time", 0) for r in results)
+                total_download = sum(r.get("download_time", 0) for r in results)
+                req_str = f"{total_request:.2f}s" if total_request >= 1 else f"{total_request:.3f}s"
+                dl_str = f"{total_download:.2f}s" if total_download >= 1 else f"{total_download:.3f}s"
+                print(f"{self.NODE_LABEL}: 完成！请求耗时 {req_str} | 下载耗时 {dl_str} | 总耗时 {time_str}")
 
             # 收集输出图像
             output_images = []
@@ -661,6 +677,7 @@ class NanoBananaV2:
                     f"所有任务均失败 ({len(failed)}/{len(results)})：\n{error_details}"
                 )
 
+            output_images = [self._apply_image_format(img, image_format) for img in output_images]
             output_tensor = _images_to_tensor_safe(output_images, self.NODE_LABEL)
 
             import gc
@@ -721,7 +738,10 @@ class NanoBananaV2Batch(NanoBananaV2):
                 if k in types["optional"]:
                     new_optional[k] = types["optional"][k]
 
-        # 2. 图片格式
+        # 2. 图片质量
+        new_optional["图片质量"] = (["日常", "高清"], {"default": "日常"})
+
+        # 2.5 图片格式
         new_optional["图片格式"] = (["PNG", "JPEG"], {"default": "JPEG"})
 
         # 3. seed
@@ -960,6 +980,7 @@ class NanoBananaV2Batch(NanoBananaV2):
         seed: int = kwargs.pop("seed", 0)
         proxy_port: str = kwargs.pop("代理端口", "")
         api_key_override: str = kwargs.pop("分组令牌", "")
+        图片质量: str = kwargs.pop("图片质量", "日常")
         image_format: str = kwargs.pop("图片格式", "JPEG")
         save_path: str = kwargs.pop("图片保存路径（可选）", "").strip()
         命名规则选择: str = kwargs.pop("图片命名规则", "和图片同名")
@@ -970,6 +991,7 @@ class NanoBananaV2Batch(NanoBananaV2):
 
         proxy_url = BaseAsyncImageProvider.build_proxy_url(proxy_port)
         provider = self._get_provider(模型, proxy_url=proxy_url, api_key_override=api_key_override)
+        provider.image_compression = "webp" if 图片质量 == "日常" else None
 
         if proxy_url:
             print(f"{self.NODE_LABEL}: 已启用代理加速 -> {proxy_url}")

@@ -72,6 +72,7 @@ class GeminiAsyncImageProvider(BaseAsyncImageProvider):
             resolution=resolution,
             enable_grounding=kwargs.get("enable_grounding", False),
             enable_image_search=kwargs.get("enable_image_search", False),
+            image_compression=getattr(self, 'image_compression', None),
         )
 
     def extract_task_id(self, response: dict) -> str:
