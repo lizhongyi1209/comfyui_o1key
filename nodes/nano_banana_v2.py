@@ -242,6 +242,10 @@ class NanoBananaV2:
                 "若是正常出图过程中遇到该报错，说明该错误只是暂时的，稍后重试即可。或切换其他模型。"
                 f"\n（原始错误: {error_msg}）"
             )
+        if "401" in error_msg and "Invalid token" in error_msg:
+            return "API令牌不正确或余额不足，请检查！\n（原始错误: " + error_msg + "）"
+        if "Invalid token" in error_msg:
+            return "API令牌不正确或余额不足，请检查！\n（原始错误: " + error_msg + "）"
         return error_msg
 
     @staticmethod
