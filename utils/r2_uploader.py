@@ -18,7 +18,8 @@ async def _presign(filename: str, content_type: str) -> tuple:
     api_key = get_api_key_or_raise()
     base_url = get_api_base_url()
 
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
         async with session.post(
             f"{base_url}/v1/storage/presign",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -35,7 +36,8 @@ async def _presign(filename: str, content_type: str) -> tuple:
 
 async def _put_upload(upload_url: str, data: bytes, content_type: str):
     """用预签名 URL 直传文件到 R2（不带 Authorization）"""
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
         async with session.put(
             upload_url,
             data=data,

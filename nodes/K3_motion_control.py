@@ -13,7 +13,7 @@ import tempfile
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.config import get_api_key_or_raise, get_async_api_base_url
 from ..utils.r2_uploader import upload_video, upload_image
 from ..utils.image_utils import tensor_to_pil
 
@@ -107,7 +107,7 @@ class K3MotionControl:
                 "参考视频":   ("VIDEO",),
                 "提示词":     ("STRING", {"multiline": True, "default": ""}),
                 "模型":       (["v3", "v2-6"], {"default": "v3"}),
-                "模式":       (["标准", "专家"], {"default": "专家"}),
+                "模式":       (["720p", "1080p"], {"default": "1080p"}),
                 "时长":       ([5, 10, 15, 20, 25, 30], {"default": 5}),
                 "角色朝向":   (["图片", "视频"], {"default": "图片"}),
                 "保留原声":   (["打开", "关闭"], {"default": "打开"}),
@@ -125,14 +125,14 @@ class K3MotionControl:
 
     async def generate(self, 参考图片, 参考视频, 提示词, 保留原声, 角色朝向, 模式, 模型, 时长, seed, **kwargs):
         api_key  = get_api_key_or_raise()
-        base_url = get_api_base_url()
+        base_url = get_async_api_base_url()
         headers  = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
         }
 
         # ── 参数映射 ──────────────────────────────────────────────────
-        mode_api              = "std" if 模式 == "标准" else "pro"
+        mode_api              = "std" if 模式 == "720p" else "pro"
         model_name            = f"kling-{模型}-motion-{mode_api}-{时长}s"
         character_orientation = "image" if 角色朝向 == "图片" else "video"
         keep_sound            = "yes" if 保留原声 == "打开" else "no"

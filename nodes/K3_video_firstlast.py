@@ -10,7 +10,7 @@ import tempfile
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.config import get_api_key_or_raise, get_async_api_base_url
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
 
 try:
@@ -24,8 +24,8 @@ except Exception:
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 
 _MODEL_BASE = "kling-v3"
-_MODES      = ["标准", "专家", "4K"]
-_MODE_MAP   = {"标准": "std", "专家": "pro", "4K": "4k"}
+_MODES      = ["720p", "1080p", "4K"]
+_MODE_MAP   = {"720p": "std", "1080p": "pro", "4K": "4k"}
 
 _ENDPOINT_CREATE = "/v1/video/generations"
 _ENDPOINT_STATUS = "/v1/video/generations/{task_id}"
@@ -93,7 +93,7 @@ class K3VideoFirstLast:
                 "负向提示词": ("STRING", {"multiline": True, "default": ""}),
                 "时长":      ([5, 10, 15], {"default": 5}),
                 "生成音频":  (["关闭", "打开"], {"default": "关闭"}),
-                "模式":      (_MODES, {"default": "标准"}),
+                "模式":      (_MODES, {"default": "720p"}),
                 "seed": ("INT", {
                     "default": 0, "min": 0, "max": 2147483647,
                     "tooltip": "seed 仅控制节点是否重新运行，结果本身不可复现。",
@@ -111,7 +111,7 @@ class K3VideoFirstLast:
 
     async def generate(self, 起始帧, 提示词, 负向提示词, 时长, 生成音频, 模式, seed, 尾帧=None):
         api_key  = get_api_key_or_raise()
-        base_url = get_api_base_url()
+        base_url = get_async_api_base_url()
         headers  = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",

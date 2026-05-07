@@ -4,12 +4,13 @@ K26 图生视频节点
 
 import asyncio
 import json
+import math
 import os
 import tempfile
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.config import get_api_key_or_raise, get_async_api_base_url
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
 
 try:
@@ -30,13 +31,20 @@ _POLL_INIT     = 3
 _POLL_MAX      = 15
 
 
-def _image_to_base64(tensor) -> str:
+def _image_to_base64(tensor, scale=1.0) -> str:
+    from PIL import Image
     pil = tensor_to_pil(tensor)
-    return encode_image_to_base64(pil[0], format="PNG")
+    img = pil[0]
+    if scale < 1.0:
+        w, h = img.size
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+    return encode_image_to_base64(img, format="PNG")
 
 
-class KVideo:
-    """K26 图生视频节点"""
+class KVideoFirstLast:
+    """K26 图生视频节点（首尾帧）"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -44,9 +52,13 @@ class KVideo:
             "required": {
                 "起始帧":   ("IMAGE",),
                 "提示词":   ("STRING", {"multiline": True, "default": ""}),
-                "模式":     (["pro"],),
+                "模式":     (["1080p"],),
                 "时长":     ([5, 10],),
                 "生成音频": (["关闭", "打开"], {"default": "关闭"}),
+                "seed": ("INT", {
+                    "default": 0, "min": 0, "max": 2147483647,
+                    "tooltip": "seed 仅控制节点是否重新运行，结果本身不可复现。",
+                }),
             },
             "optional": {
                 "尾帧":     ("IMAGE",),
@@ -58,30 +70,56 @@ class KVideo:
     FUNCTION = "generate"
     CATEGORY = "comfyui_o1key/KVideo"
 
-    async def generate(self, 起始帧, 提示词, 模式, 时长, 生成音频="关闭", 尾帧=None):
+    async def generate(self, 起始帧, 提示词, 模式, 时长, 生成音频="关闭", 尾帧=None, seed=0):
         api_key  = get_api_key_or_raise()
-        base_url = get_api_base_url()
+        base_url = get_async_api_base_url()
         headers  = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
         }
 
         # ── 动态拼接模型名 ────────────────────────────────────────────
+        mode_api   = "pro"  # 1080p 映射为 pro
         voice      = "voice" if 生成音频 == "打开" else "novoice"
-        model_name = f"{_MODEL_BASE}-{模式}-{时长}s-{voice}"
+        model_name = f"{_MODEL_BASE}-{mode_api}-{时长}s-{voice}"
 
-        # ── 构建请求体 ────────────────────────────────────────────────
-        body = {
-            "model":    model_name,
-            "prompt":   提示词.strip(),
-            "image":    _image_to_base64(起始帧),
-            "mode":     模式,
-            "duration": 时长,
-        }
-        if 生成音频 == "打开":
-            body["generate_audio"] = True
-        if 尾帧 is not None:
-            body["metadata"] = {"image_tail": _image_to_base64(尾帧)}
+        # ── 构建请求体（超过 10MB 自动缩放图片）────────────────────────
+        MAX_BODY  = 10 * 1024 * 1024
+        scale     = 1.0
+
+        print(f"[K26 图生视频] 请求体大小限制: 10MB，超出将自动缩放图片")
+
+        while True:
+            body = {
+                "model":    model_name,
+                "prompt":   提示词.strip(),
+                "image":    _image_to_base64(起始帧, scale),
+                "mode":     mode_api,
+                "duration": 时长,
+            }
+            if 生成音频 == "打开":
+                body["generate_audio"] = True
+            if 尾帧 is not None:
+                body["metadata"] = {"image_tail": _image_to_base64(尾帧, scale)}
+
+            body_str  = json.dumps(body, ensure_ascii=False)
+            body_size = len(body_str.encode("utf-8"))
+
+            if body_size <= MAX_BODY:
+                print(f"[K26 图生视频] 请求体大小: {body_size / 1024 / 1024:.2f}MB"
+                      + (f"（已缩放至 {scale:.1%}）" if scale < 1.0 else ""))
+                break
+
+            # 等比缩放：图片像素面积与 base64 长度近似线性
+            target_ratio = MAX_BODY / body_size
+            scale = scale * math.sqrt(target_ratio) * 0.95  # 5% 安全余量
+
+            if scale < 0.01:
+                raise RuntimeError("图片缩放后仍超过10MB限制，请使用更小的参考图")
+
+            w, h = tensor_to_pil(起始帧)[0].size
+            print(f"[K26 图生视频] 请求体 {body_size / 1024 / 1024:.2f}MB 超限，"
+                  f"自动缩放至 {scale:.1%}（{int(w * scale)}x{int(h * scale)}）")
 
         # ── 进度条 ────────────────────────────────────────────────────
         try:
@@ -205,9 +243,9 @@ class KVideo:
 
 
 NODE_CLASS_MAPPINGS = {
-    "KVideo": KVideo,
+    "KVideoFirstLast": KVideoFirstLast,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "KVideo": "K26 图生视频",
+    "KVideoFirstLast": "K26 图生视频（首尾帧）",
 }

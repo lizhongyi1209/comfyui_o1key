@@ -12,7 +12,7 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 
 import ssl
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, KVideo
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, SaveCleanImage, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, MultiResPreview, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, KVideoFirstLast, KVideoImage2Video
 from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck, NanoBananaV2, NanoBananaV2Batch
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
@@ -74,7 +74,8 @@ NODE_CLASS_MAPPINGS = {
     "StreamPreview": StreamPreview,
     "DoubaoImage": DoubaoImage,
     "O1keyGPTImage": O1keyGPTImage,
-    "KVideo": KVideo,
+    "KVideoFirstLast": KVideoFirstLast,
+    "KVideoImage2Video": KVideoImage2Video,
     "K3Video": K3Video,
     "K3VideoFirstLast": K3VideoFirstLast,
     "K3MotionControl": K3MotionControl,
@@ -106,7 +107,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "StreamPreview": "流式文本预览",
     "DoubaoImage": "豆包生图",
     "O1keyGPTImage": "o1key GPT Image",
-    "KVideo": "K26 图生视频",
+    "KVideoFirstLast": "K26 图生视频（首尾帧）",
+    "KVideoImage2Video": "K26 图生视频",
     "K3Video": "K3 图生视频 自研",
     "K3VideoFirstLast": "首尾帧 K3 自研",
     "K3MotionControl": "动作控制 K3 自研",

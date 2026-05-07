@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Optional
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.config import get_api_key_or_raise, get_async_api_base_url
 
 
 class SeedanceClient:
@@ -30,7 +30,7 @@ class SeedanceClient:
 
     def __init__(self):
         self.api_key = get_api_key_or_raise()
-        self.base_url = get_api_base_url()
+        self.base_url = get_async_api_base_url()
 
     def _headers(self) -> Dict[str, str]:
         return {

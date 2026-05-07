@@ -62,8 +62,9 @@ except ImportError:
 DEBUG_LOG_ENABLED = False
 REQUEST_LOG_ENABLED = False
 
-_POLL_INTERVAL = 2      # 轮询间隔（秒）
-_MAX_WAIT_TIME = 900     # 单任务最大等待时间（秒）
+_POLL_INTERVAL = 2           # 轮询间隔（秒）
+_INTERRUPT_CHECK_INTERVAL = 0.1  # 取消检查间隔（秒）
+_MAX_WAIT_TIME = 900         # 单任务最大等待时间（秒）
 
 
 def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.Tensor:
@@ -374,7 +375,11 @@ class NanoBananaV2:
                     friendly_msg = self._friendly_error(error_msg)
                     raise RuntimeError(f"任务失败: {friendly_msg}")
                 elif status in ("SUBMITTED", "IN_PROGRESS"):
-                    await asyncio.sleep(_POLL_INTERVAL)
+                    # 分段 sleep，每 0.1 秒检查一次取消信号
+                    sleep_iterations = int(_POLL_INTERVAL / _INTERRUPT_CHECK_INTERVAL)
+                    for _ in range(sleep_iterations):
+                        self._check_interrupt()
+                        await asyncio.sleep(_INTERRUPT_CHECK_INTERVAL)
                 else:
                     raise RuntimeError(f"未知任务状态: {status}")
 
