@@ -11,7 +11,7 @@ import tempfile
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise, get_async_api_base_url
+from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
 
 try:
@@ -70,7 +70,7 @@ class KVideoImage2Video:
 
     async def generate(self, 起始帧, 提示词, 模式, 时长, 生成音频="关闭", seed=0):
         api_key  = get_api_key_or_raise()
-        base_url = get_async_api_base_url()
+        base_url = get_api_base_url()
         headers  = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
