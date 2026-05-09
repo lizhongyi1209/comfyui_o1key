@@ -33,6 +33,7 @@ _ENDPOINT_EDITS       = "/v1/images/edits/"
 
 # ── 模型名映射（UI 显示名 → API 实际参数名）─────────────────────────────────
 _MODEL_NAME_MAP = {
+    "gpt-image-2-按量": "gpt-image-2",
     "gpt-image-2-次卡": "gpt-image-2-special",
 }
 
