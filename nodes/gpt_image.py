@@ -7,6 +7,14 @@ import time
 from ..clients.gpt_image_client import GptImageClient
 from ..utils.image_utils import parse_batch_prompts
 
+try:
+    from comfy.model_management import processing_interrupted, InterruptProcessingException
+    _INTERRUPT_AVAILABLE = True
+except ImportError:
+    _INTERRUPT_AVAILABLE = False
+    processing_interrupted = lambda: False
+    InterruptProcessingException = RuntimeError
+
 
 class O1keyGPTImage:
     """
@@ -163,6 +171,9 @@ class O1keyGPTImage:
                 total = len(batch_prompts)
                 print(f"[o1key GPT Image] 批量模式 | {total} 条提示词 | 每条生成 {生图数量} 张")
                 for idx, p in enumerate(batch_prompts, 1):
+                    if _INTERRUPT_AVAILABLE and processing_interrupted():
+                        print("[o1key GPT Image] 用户取消，已中断批量生成")
+                        raise InterruptProcessingException()
                     try:
                         pil_images = client.run_sync(
                             prompt=p,
@@ -177,6 +188,8 @@ class O1keyGPTImage:
                         all_pil_images.extend(pil_images)
                         snippet = p[:30] + ("..." if len(p) >= 30 else "")
                         print(f"[o1key GPT Image] [{idx}/{total}] ✓ {snippet}")
+                    except InterruptProcessingException:
+                        raise
                     except Exception as e:
                         error_msg = str(e).split('\n')[0]
                         snippet = p[:30] + ("..." if len(p) >= 30 else "")
@@ -197,6 +210,8 @@ class O1keyGPTImage:
                         mask_tensor=遮罩,
                     )
                     all_pil_images.extend(pil_images)
+                except InterruptProcessingException:
+                    raise
                 except Exception as e:
                     error_msg = str(e).split('\n')[0]
                     print(f"[o1key GPT Image] ❌ {error_msg}")

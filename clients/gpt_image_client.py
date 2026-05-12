@@ -27,6 +27,14 @@ from PIL import Image
 from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
 
+try:
+    from comfy.model_management import processing_interrupted, InterruptProcessingException
+    _INTERRUPT_AVAILABLE = True
+except ImportError:
+    _INTERRUPT_AVAILABLE = False
+    InterruptProcessingException = RuntimeError
+    processing_interrupted = lambda: False
+
 # ── 接口端点 ──────────────────────────────────────────────────────────────────
 _ENDPOINT_GENERATIONS = "/v1/images/generations/"
 _ENDPOINT_EDITS       = "/v1/images/edits/"
@@ -220,6 +228,45 @@ class GptImageClient:
 
         return images
 
+    # ── 中断轮询 ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def _poll_interrupt():
+        """每 0.5s 轮询一次 ComfyUI 中断标志"""
+        while True:
+            await asyncio.sleep(0.5)
+            if _INTERRUPT_AVAILABLE and processing_interrupted():
+                return
+
+    @staticmethod
+    async def _run_with_interrupt(coro):
+        """
+        将异步任务与中断轮询并发执行。
+        如果用户点击取消，cancel 掉 coro 并抛出 InterruptProcessingException。
+        """
+        if not _INTERRUPT_AVAILABLE:
+            return await coro
+
+        request_task = asyncio.ensure_future(coro)
+        interrupt_task = asyncio.ensure_future(GptImageClient._poll_interrupt())
+
+        done, pending = await asyncio.wait(
+            [request_task, interrupt_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        if interrupt_task in done and request_task not in done:
+            raise InterruptProcessingException()
+
+        return request_task.result()
+
     # ── 文生图 / 图生图（generations 接口）───────────────────────────────────
 
     async def _generate_async(
@@ -281,32 +328,35 @@ class GptImageClient:
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         timeout   = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
 
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            t0 = time.time()
-            async with session.post(url, json=body, headers=self._json_headers()) as resp:
-                elapsed = time.time() - t0
-                text = await resp.text()
+        async def _do_request():
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                t0 = time.time()
+                async with session.post(url, json=body, headers=self._json_headers()) as resp:
+                    elapsed = time.time() - t0
+                    text = await resp.text()
 
-                if resp.status != 200:
+                    if resp.status != 200:
+                        try:
+                            err_json = json.loads(text)
+                            err_obj  = err_json.get("error", {})
+                            msg = (
+                                err_obj.get("message") or err_obj.get("msg") or text
+                                if isinstance(err_obj, dict)
+                                else str(err_obj) or text
+                            )
+                        except Exception:
+                            msg = text
+                        raise RuntimeError(f"请求失败 HTTP {resp.status}: {msg}")
+
                     try:
-                        err_json = json.loads(text)
-                        err_obj  = err_json.get("error", {})
-                        msg = (
-                            err_obj.get("message") or err_obj.get("msg") or text
-                            if isinstance(err_obj, dict)
-                            else str(err_obj) or text
-                        )
+                        resp_json = json.loads(text)
                     except Exception:
-                        msg = text
-                    raise RuntimeError(f"请求失败 HTTP {resp.status}: {msg}")
+                        raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
 
-                try:
-                    resp_json = json.loads(text)
-                except Exception:
-                    raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
+                print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
+                return await self._parse_response(resp_json, session)
 
-            print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
-            return await self._parse_response(resp_json, session)
+        return await self._run_with_interrupt(_do_request())
 
     # ── 图像编辑（edits 接口，multipart/form-data）──────────────────────────
 
@@ -384,36 +434,39 @@ class GptImageClient:
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         timeout   = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
 
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            t0 = time.time()
-            async with session.post(
-                url,
-                data=form,
-                headers=self._auth_headers(),
-            ) as resp:
-                elapsed = time.time() - t0
-                text = await resp.text()
+        async def _do_request():
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                t0 = time.time()
+                async with session.post(
+                    url,
+                    data=form,
+                    headers=self._auth_headers(),
+                ) as resp:
+                    elapsed = time.time() - t0
+                    text = await resp.text()
 
-                if resp.status != 200:
+                    if resp.status != 200:
+                        try:
+                            err_json = json.loads(text)
+                            err_obj  = err_json.get("error", {})
+                            msg = (
+                                err_obj.get("message") or err_obj.get("msg") or text
+                                if isinstance(err_obj, dict)
+                                else str(err_obj) or text
+                            )
+                        except Exception:
+                            msg = text
+                        raise RuntimeError(f"请求失败 HTTP {resp.status}: {msg}")
+
                     try:
-                        err_json = json.loads(text)
-                        err_obj  = err_json.get("error", {})
-                        msg = (
-                            err_obj.get("message") or err_obj.get("msg") or text
-                            if isinstance(err_obj, dict)
-                            else str(err_obj) or text
-                        )
+                        resp_json = json.loads(text)
                     except Exception:
-                        msg = text
-                    raise RuntimeError(f"请求失败 HTTP {resp.status}: {msg}")
+                        raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
 
-                try:
-                    resp_json = json.loads(text)
-                except Exception:
-                    raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
+                print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
+                return await self._parse_response(resp_json, session)
 
-            print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
-            return await self._parse_response(resp_json, session)
+        return await self._run_with_interrupt(_do_request())
 
     # ── 同步统一入口（供节点调用）────────────────────────────────────────────
 
