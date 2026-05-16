@@ -93,6 +93,18 @@ GEMINI_MODELS = [
         ],
         "supported_resolutions": ["512px", "1K", "2K", "4K"]
     },
+    {
+        "id": "nano-banana-次卡",
+        "description": "Nano Banana 次卡，固定端点，图像生成模型",
+        "enabled": True,
+        "provider": "gemini_async",
+        "endpoint_type": "standard",
+        "endpoint": "/v1beta/models/nano-banana:generateContent",
+        "supported_aspect_ratios": [
+            "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+        ],
+        "supported_resolutions": ["1K"]
+    },
 ]
 
 
