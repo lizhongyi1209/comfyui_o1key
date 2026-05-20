@@ -26,10 +26,12 @@ from ..utils.file_types import FileList
 
 SUPPORTED_MODELS = [
     "gpt-5.5",
-    "gemini-3.1-flash-lite-preview",
     "gemini-3.1-pro-preview",
     "deepseek-v4-pro",
-    "doubao-seed-2-0-pro-260215",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "gemini-3.5-flash",
+    "doubao-seed-2.0-pro",
 ]
 
 # 图片缩放最大尺寸

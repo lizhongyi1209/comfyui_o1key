@@ -114,11 +114,11 @@ GEMINI_MODELS = [
 
 GEMINI_FLASH_MODELS = [
     {
-        "id": "gemini-3-flash-preview",
-        "description": "Gemini 3 Flash,快速多模态文本生成,通过 thinkingConfig 控制思考等级",
+        "id": "gemini-3.5-flash",
+        "description": "Gemini 3.5 Flash,快速多模态文本生成,通过 thinkingConfig 控制思考等级",
         "enabled": True,
         "endpoint_type": "standard",
-        "endpoint": "/v1beta/models/gemini-3-flash-preview:generateContent",
+        "endpoint": "/v1beta/models/gemini-3.5-flash:generateContent",
         "thinking_config": {
             "低": "low",
             "中": "medium",
@@ -137,19 +137,6 @@ GEMINI_FLASH_MODELS = [
             "中": "high"
         }
     },
-
-    {
-        "id": "gemini-3.1-flash-lite-preview",
-        "description": "Gemini 3.1 Flash Lite,轻量级多模态文本生成,通过 thinkingConfig 控制思考等级",
-        "enabled": True,
-        "endpoint_type": "standard",
-        "endpoint": "/v1beta/models/gemini-3.1-flash-lite-preview:generateContent",
-        "thinking_config": {
-            "低": "low",
-            "中": "medium",
-            "高": "high"
-        }
-    }
 ]
 
 
