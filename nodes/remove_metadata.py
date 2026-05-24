@@ -1,77 +1,16 @@
 """
 图像元数据去除节点
-替代 ComfyUI 原生"保存图像"节点，保存时不写入提示词、工作流等 AI 元数据
 
-提供两种节点：
-1. SaveCleanImage   - 接收 IMAGE 张量，去除元数据后直接保存到 output 目录
-2. BatchCleanMetadata - 指定文件夹路径，批量去除已有图片中的元数据
+提供批量去除已有图片中元数据的功能
 """
 
 import os
-from datetime import datetime
-import random
-from typing import List
 
-import numpy as np
-import torch
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
-from ..utils.image_utils import tensor_to_pil
-from ..utils.file_utils import _get_port_suffix
-
-# 尝试导入 ComfyUI 的 folder_paths
-try:
-    import folder_paths
-    FOLDER_PATHS_AVAILABLE = True
-except ImportError:
-    FOLDER_PATHS_AVAILABLE = False
-
 # 支持的图片格式
 SUPPORTED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
-
-
-def _get_output_dir() -> str:
-    """
-    获取 ComfyUI output 目录
-
-    Returns:
-        output 目录的绝对路径
-    """
-    if FOLDER_PATHS_AVAILABLE:
-        return folder_paths.get_output_directory()
-    # fallback: 相对于插件目录推断
-    plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(os.path.dirname(os.path.dirname(plugin_dir)), "output")
-
-
-def _get_next_counter(directory: str, prefix: str) -> int:
-    """
-    扫描目录，获取下一个可用的文件计数器
-
-    Args:
-        directory: 目标目录
-        prefix: 文件名前缀
-
-    Returns:
-        下一个计数器值
-    """
-    if not os.path.exists(directory):
-        return 1
-
-    if prefix:
-        pattern = re.compile(rf'^{re.escape(prefix)}_(\d+)')
-    else:
-        pattern = re.compile(rf'^(\d+)\.')
-    max_counter = 0
-
-    for f in os.listdir(directory):
-        m = pattern.match(f)
-        if m:
-            counter = int(m.group(1))
-            max_counter = max(max_counter, counter)
-
-    return max_counter + 1
 
 
 def _save_image_clean(image: Image.Image, path: str, fmt: str = None, quality: int = 95) -> None:
@@ -127,129 +66,7 @@ def _save_image_clean(image: Image.Image, path: str, fmt: str = None, quality: i
 
 
 # ============================================================================
-# 节点 1：保存干净图像
-# ============================================================================
-
-class SaveCleanImage:
-    """
-    保存干净图像节点（不含元数据）
-
-    功能：
-    - 接收 IMAGE 张量（支持单图和批次）
-    - 去除所有元数据后保存到 ComfyUI/output 目录
-    - 文件名自动添加 nometa 标识，方便辨认
-    - 支持 PNG/JPEG/WEBP 格式
-    - 作为终端节点，替代 ComfyUI 原生"保存图像"节点
-
-    使用场景：
-    - 生图完成后，直接保存不含 AI 元数据的干净图像
-    - 分享图像时不暴露提示词和工作流
-    """
-
-    SAVE_FORMATS = ["PNG", "JPEG", "WEBP"]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        """
-        定义输入参数
-
-        Returns:
-            输入参数配置字典
-        """
-        return {
-            "required": {
-                "图像": ("IMAGE",),
-                "文件名前缀": ("STRING", {"default": "ComfyUI_nometa"}),
-                "保存格式": (cls.SAVE_FORMATS, {"default": "PNG"}),
-            },
-            "optional": {
-                "JPEG/WEBP质量": ("INT", {
-                    "default": 95,
-                    "min": 1,
-                    "max": 100,
-                    "step": 1
-                }),
-            }
-        }
-
-    RETURN_TYPES = ()
-    OUTPUT_NODE = True
-    FUNCTION = "save_clean"
-    CATEGORY = "image"
-
-    DESCRIPTION = (
-        "保存干净图像（不含元数据）。\n"
-        "替代 ComfyUI 原生'保存图像'节点，保存时不写入提示词、工作流等 AI 元数据。\n"
-        "文件保存到 ComfyUI/output 目录。"
-    )
-
-    def save_clean(
-        self,
-        图像: torch.Tensor,
-        文件名前缀: str = "ComfyUI_nometa",
-        保存格式: str = "PNG",
-        **kwargs
-    ) -> dict:
-        """
-        去除元数据并保存图像
-
-        Args:
-            图像: ComfyUI 图像张量 [B, H, W, C]
-            文件名前缀: 保存文件名前缀
-            保存格式: 图像格式（PNG/JPEG/WEBP）
-            **kwargs: 可选参数（JPEG/WEBP质量）
-
-        Returns:
-            UI 结果字典，包含保存的图像信息用于前端预览
-        """
-        quality = kwargs.get("JPEG/WEBP质量", 95)
-
-        output_dir = _get_output_dir()
-        port_suffix = _get_port_suffix()
-        os.makedirs(output_dir, exist_ok=True)
-
-        # 格式与扩展名映射
-        ext_map = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
-        ext = ext_map.get(保存格式, ".png")
-
-        # 转换为 PIL 图像
-        pil_images = tensor_to_pil(图像)
-
-        results = []
-        saved_paths = []
-        for img in pil_images:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            ms = random.randint(0, 999)
-
-            while True:
-                if 文件名前缀:
-                    filename = f"{文件名前缀}_{ts}_{ms:03d}{port_suffix}{ext}"
-                else:
-                    filename = f"{ts}_{ms:03d}{port_suffix}{ext}"
-                filepath = os.path.join(output_dir, filename)
-                if not os.path.exists(filepath):
-                    break
-                ms = (ms + 1) % 1000
-
-            _save_image_clean(img, filepath, fmt=保存格式, quality=quality)
-
-            results.append({
-                "filename": filename,
-                "subfolder": "",
-                "type": "output"
-            })
-            saved_paths.append(filepath)
-
-        # 打印详细日志，方便用户定位保存的文件
-        print(f"保存干净图像: 已保存 {len(pil_images)} 张无元数据图像 (格式: {保存格式})")
-        for p in saved_paths:
-            print(f"  → {p}")
-
-        return {"ui": {"images": results}}
-
-
-# ============================================================================
-# 节点 2：批量去除元数据
+# 批量去除元数据
 # ============================================================================
 
 class BatchCleanMetadata:

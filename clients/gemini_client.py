@@ -187,6 +187,7 @@ class GeminiAPIClient(BaseAPIClient):
         enable_grounding: bool = False,
         enable_image_search: bool = False,
         image_compression: str = None,
+        thinking_level: str = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -227,15 +228,15 @@ class GeminiAPIClient(BaseAPIClient):
                     })
 
                 # 估算完整 body 大小（不含工具字段，工具字段很小可忽略）
+                est_image_config = {"imageSize": resolution}
+                if aspect_ratio and aspect_ratio != "智能":
+                    est_image_config["aspectRatio"] = aspect_ratio
                 estimated = self._estimate_body_size(
                     parts + img_parts,
                     {
                         "generationConfig": {
                             "responseModalities": ["IMAGE"],
-                            "imageConfig": {
-                                "aspectRatio": aspect_ratio,
-                                "imageSize": resolution
-                            }
+                            "imageConfig": est_image_config
                         }
                     }
                 )
@@ -267,6 +268,10 @@ class GeminiAPIClient(BaseAPIClient):
                 parts.extend(img_parts)
 
         # 构建请求体
+        image_config = {"imageSize": resolution}
+        if aspect_ratio and aspect_ratio != "智能":
+            image_config["aspectRatio"] = aspect_ratio
+
         request_body = {
             "contents": [
                 {
@@ -276,12 +281,16 @@ class GeminiAPIClient(BaseAPIClient):
             ],
             "generationConfig": {
                 "responseModalities": ["IMAGE"],
-                "imageConfig": {
-                    "aspectRatio": aspect_ratio,
-                    "imageSize": resolution
-                }
+                "imageConfig": image_config
             }
         }
+
+        # 添加思考深度配置
+        if thinking_level:
+            request_body["generationConfig"]["thinkingConfig"] = {
+                "thinkingLevel": thinking_level,
+                "includeThoughts": True
+            }
 
         # 添加图片压缩参数
         if image_compression:
@@ -564,6 +573,7 @@ class GeminiAPIClient(BaseAPIClient):
         enable_grounding: bool = False,
         enable_image_search: bool = False,
         image_format: str = "base64",
+        thinking_level: str = None,
     ) -> tuple[List[Image.Image], Dict[str, Any]]:
         """
         单次异步生成请求（极简单行日志）
@@ -602,6 +612,7 @@ class GeminiAPIClient(BaseAPIClient):
             resolution=resolution,
             enable_grounding=enable_grounding,
             enable_image_search=enable_image_search,
+            thinking_level=thinking_level,
         )
         build_time = time.time() - build_start
         
@@ -737,6 +748,7 @@ class GeminiAPIClient(BaseAPIClient):
         enable_grounding: bool = False,
         enable_image_search: bool = False,
         image_format: str = "base64",
+        thinking_level: str = None,
     ) -> List[Image.Image]:
         """
         批量全并发生成 - 改进版：支持分批处理和内存管理
@@ -801,6 +813,7 @@ class GeminiAPIClient(BaseAPIClient):
                             enable_grounding=enable_grounding,
                             enable_image_search=enable_image_search,
                             image_format=image_format,
+                            thinking_level=thinking_level,
                         ),
                         name=f"task_{task_index}"
                     )
@@ -873,6 +886,7 @@ class GeminiAPIClient(BaseAPIClient):
         enable_grounding: bool = False,
         enable_image_search: bool = False,
         image_format: str = "base64",
+        thinking_level: str = None,
     ) -> List[Image.Image]:
         """
         同步生成接口（用于 ComfyUI）
@@ -906,6 +920,7 @@ class GeminiAPIClient(BaseAPIClient):
             enable_grounding=enable_grounding,
             enable_image_search=enable_image_search,
             image_format=image_format,
+            thinking_level=thinking_level,
         )
 
         return self.run_async_in_thread(coro)

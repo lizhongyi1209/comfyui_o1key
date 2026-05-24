@@ -44,7 +44,7 @@ class GeminiAsyncImageProvider(BaseAsyncImageProvider):
 
     @property
     def api_base_url(self) -> str:
-        return get_async_api_base_url()
+        return getattr(self, '_route_base_url', None) or get_async_api_base_url()
 
     def get_submit_endpoint(self, model: str, resolution: str) -> str:
         gemini_endpoint = self._client.get_endpoint(

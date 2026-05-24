@@ -110,6 +110,57 @@ def encode_image_to_base64(image: Image.Image, format: str = "PNG") -> str:
     return base64.b64encode(img_bytes).decode('utf-8')
 
 
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB base64 上限
+
+
+def encode_image_to_base64_limited(
+    image: Image.Image,
+    format: str = "PNG",
+    max_bytes: int = _MAX_IMAGE_BYTES,
+) -> str:
+    """
+    将 PIL Image 编码为 base64，若超过 max_bytes 则自动缩放直到满足限制。
+
+    策略：等比缩放，每轮缩小到上一轮的 80%，最多 10 轮。
+
+    Args:
+        image: PIL Image 对象
+        format: 图像格式，默认 PNG
+        max_bytes: base64 字符串最大字节数，默认 10MB
+
+    Returns:
+        base64 编码的字符串（保证 <= max_bytes）
+    """
+    working = image
+    if working.mode == 'RGBA':
+        working = working.convert('RGB')
+
+    for attempt in range(10):
+        buffered = BytesIO()
+        working.save(buffered, format=format)
+        b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+        if len(b64) <= max_bytes:
+            if attempt > 0:
+                print(
+                    f"图片已自动缩放: {image.width}x{image.height} → "
+                    f"{working.width}x{working.height} "
+                    f"({len(b64) / 1024 / 1024:.2f}MB)"
+                )
+            return b64
+
+        # 缩放到 80%
+        scale = 0.8
+        new_w = max(1, int(working.width * scale))
+        new_h = max(1, int(working.height * scale))
+        working = working.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    # 兜底：返回最后一次编码结果
+    buffered = BytesIO()
+    working.save(buffered, format=format)
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+
 def decode_base64_to_pil(base64_string: str) -> Image.Image:
     """
     将 base64 字符串解码为 PIL Image

@@ -6,6 +6,7 @@ o1key GPT Image 节点
 import time
 from ..clients.gpt_image_client import GptImageClient
 from ..utils.image_utils import parse_batch_prompts
+from ..utils.config import NETWORK_ROUTE_OPTIONS, get_base_url_by_route
 
 try:
     from comfy.model_management import processing_interrupted, InterruptProcessingException
@@ -52,30 +53,33 @@ class O1keyGPTImage:
         ], {
             "default": "gpt-image-2-次卡",
         })
+        optional_inputs["网络"] = (NETWORK_ROUTE_OPTIONS, {
+            "default": "全球加速",
+        })
         optional_inputs["分辨率"] = ([
             "智能",
             # ── 1K ──
             "1024x1024（1K 正方形 1:1）",
             "1536x1024（1K 横版 3:2）",
             "1024x1536（1K 竖版 2:3）",
-            "1365x1024（1K 横版 4:3）",
-            "1024x1365（1K 竖版 3:4）",
-            "1820x1024（1K 横版 16:9）",
-            "1024x1820（1K 竖版 9:16）",
+            "1360x1024（1K 横版 4:3）",
+            "1024x1360（1K 竖版 3:4）",
+            "1824x1024（1K 横版 16:9）",
+            "1024x1824（1K 竖版 9:16）",
             # ── 2K ──
             "2048x2048（2K 正方形 1:1）",
             "3072x2048（2K 横版 3:2）",
             "2048x3072（2K 竖版 2:3）",
-            "2732x2048（2K 横版 4:3）",
-            "2048x2732（2K 竖版 3:4）",
-            "3640x2048（2K 横版 16:9）",
-            "2048x3640（2K 竖版 9:16）",
+            "2736x2048（2K 横版 4:3）",
+            "2048x2736（2K 竖版 3:4）",
+            "3648x2048（2K 横版 16:9）",
+            "2048x3648（2K 竖版 9:16）",
             # ── 4K ──
-            "3840x3840（4K 正方形 1:1）",
-            "3840x2560（4K 横版 3:2）",
-            "2560x3840（4K 竖版 2:3）",
-            "3840x2880（4K 横版 4:3）",
-            "2880x3840（4K 竖版 3:4）",
+            "2880x2880（4K 正方形 1:1）",
+            "3504x2336（4K 横版 3:2）",
+            "2336x3504（4K 竖版 2:3）",
+            "3264x2448（4K 横版 4:3）",
+            "2448x3264（4K 竖版 3:4）",
             "3840x2160（4K 横版 16:9）",
             "2160x3840（4K 竖版 9:16）",
         ], {
@@ -128,6 +132,7 @@ class O1keyGPTImage:
         self,
         prompt: str,
         模型: str = "gpt-image-2-次卡",
+        网络: str = "全球加速",
         分辨率: str = "auto",
         质量: str = "自动",
         生图数量: int = 1,
@@ -169,6 +174,7 @@ class O1keyGPTImage:
         # ── 3. 创建客户端 ─────────────────────────────────────────────────────
         try:
             client = GptImageClient()
+            client.base_url = get_base_url_by_route(网络)
         except ValueError as e:
             if str(e) == "未授权！":
                 print("[o1key GPT Image] 请联系作者授权后方可使用！")

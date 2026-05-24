@@ -14,6 +14,7 @@ from typing import Optional
 import requests
 
 from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.http_error import HTTP_ERROR_MESSAGES
 
 
 # 显示名 → 实际请求值的映射
@@ -112,6 +113,8 @@ class FluxEditClient:
             raise RuntimeError("无法连接到服务器，请检查网络或服务器地址")
 
         if resp.status_code != 200:
+            if resp.status_code in HTTP_ERROR_MESSAGES:
+                raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status_code])
             raise RuntimeError(
                 f"提交任务失败 (HTTP {resp.status_code})\n"
                 f"响应: {resp.text[:500]}"

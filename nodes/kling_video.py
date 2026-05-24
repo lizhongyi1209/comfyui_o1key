@@ -8,6 +8,7 @@ import tempfile
 from ..clients.kling_client import KlingClient
 from ..clients.gemini_client import GeminiAPIClient
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
+from ..utils.config import NETWORK_ROUTE_OPTIONS, get_base_url_by_route
 
 from comfy_api.latest import InputImpl
 
@@ -121,6 +122,7 @@ class KlingVideo:
             "required": {
                 "提示词": ("STRING", {"multiline": True, "default": ""}),
                 "反向提示词": ("STRING", {"multiline": True, "default": ""}),
+                "网络线路": (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
                 "模型版本": (["v3", "v2-6"], {"default": "v3"}),
                 "时长": ([5, 10, 15],),
                 "分辨率": (["1080p", "720p"],),
@@ -244,13 +246,15 @@ class KlingVideo:
             body["image"] = _tensor_to_base64(start_frame)
             endpoint_type = "image2video"
         else:
-            body["metadata"] = {"aspect_ratio": aspect_ratio}
+            if aspect_ratio and aspect_ratio != "智能":
+                body["metadata"] = {"aspect_ratio": aspect_ratio}
             endpoint_type = "text2video"
 
         # ── 保存路径（临时文件，避免与下游保存节点重复落盘）──────────────────
         _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="kling_")
 
         client = KlingClient()
+        client.base_url = get_base_url_by_route(kwargs.get("网络线路", "全球加速"))
 
         # ── 进度条 ────────────────────────────────────────────────────
         try:
@@ -307,6 +311,7 @@ class KlingFirstLastFrame:
                 "首帧": ("IMAGE",),
                 "尾帧": ("IMAGE",),
                 "提示词": ("STRING", {"multiline": True, "default": ""}),
+                "网络线路": (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
                 "模型": (["v3", "v2-6"], {"default": "v3"}),
                 "分辨率": (["1080p", "720p"],),
                 "时长": ([5, 10, 15],),
@@ -391,6 +396,7 @@ class KlingFirstLastFrame:
         _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="kling_")
 
         client = KlingClient()
+        client.base_url = get_base_url_by_route(kwargs.get("网络线路", "全球加速"))
 
         # 进度条：0~100 步
         try:
@@ -454,6 +460,7 @@ class KlingMotionControlTest:
                 "提示词":     ("STRING", {"multiline": True, "default": ""}),
                 "参考图片":   ("IMAGE",),
                 "参考视频":   ("VIDEO",),
+                "网络线路":   (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
             },
             "optional": {
                 "模型":       (["v3", "v2-6"], {"default": "v3"}),
@@ -560,6 +567,7 @@ class KlingMotionControlTest:
         _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="kling_motion_")
 
         client = KlingClient()
+        client.base_url = get_base_url_by_route(kwargs.get("网络线路", "全球加速"))
 
         # ── 进度条 ────────────────────────────────────────────────────
         try:

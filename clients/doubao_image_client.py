@@ -21,6 +21,7 @@ from PIL import Image
 
 from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
+from ..utils.http_error import RETRYABLE_STATUS_CODES, HTTP_ERROR_MESSAGES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR
 
 
 # ── 固定端点 ──────────────────────────────────────────────────────────────────
@@ -245,39 +246,55 @@ class DoubaoImageClient:
 
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
 
-            # 3. 发送 POST 请求
-            t0 = time.time()
-            async with session.post(
-                url,
-                json=body,
-                headers=self._headers(),
-            ) as resp:
-                elapsed_req = time.time() - t0
-                text = await resp.text()
+            # 3. 发送 POST 请求（带退避重试）
+            last_status = None
+            for attempt in range(DEFAULT_MAX_RETRIES + 1):
+                t0 = time.time()
+                async with session.post(
+                    url,
+                    json=body,
+                    headers=self._headers(),
+                ) as resp:
+                    elapsed_req = time.time() - t0
+                    text = await resp.text()
 
-                if resp.status != 200:
-                    # 尝试解析错误信息
+                    if resp.status != 200:
+                        last_status = resp.status
+                        if resp.status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
+                            friendly = HTTP_ERROR_MESSAGES.get(resp.status)
+                            delay = _compute_delay(attempt, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR)
+                            print(f"[豆包生图] {friendly} {delay:.1f}s 后重试 ({attempt+1}/{DEFAULT_MAX_RETRIES})...")
+                            await asyncio.sleep(delay)
+                            continue
+                        if resp.status in HTTP_ERROR_MESSAGES:
+                            raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
+                        try:
+                            err_json = json.loads(text)
+                            err_obj = err_json.get("error", {})
+                            if isinstance(err_obj, dict):
+                                msg = (
+                                    err_obj.get("message")
+                                    or err_obj.get("msg")
+                                    or text
+                                )
+                            else:
+                                msg = str(err_obj) or text
+                        except Exception:
+                            msg = text
+                        raise RuntimeError(
+                            f"请求失败 HTTP {resp.status}: {msg}"
+                        )
+
                     try:
-                        err_json = json.loads(text)
-                        err_obj = err_json.get("error", {})
-                        if isinstance(err_obj, dict):
-                            msg = (
-                                err_obj.get("message")
-                                or err_obj.get("msg")
-                                or text
-                            )
-                        else:
-                            msg = str(err_obj) or text
+                        resp_json = json.loads(text)
                     except Exception:
-                        msg = text
-                    raise RuntimeError(
-                        f"请求失败 HTTP {resp.status}: {msg}"
-                    )
+                        raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
 
-                try:
-                    resp_json = json.loads(text)
-                except Exception:
-                    raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
+                break
+            else:
+                if last_status and last_status in HTTP_ERROR_MESSAGES:
+                    raise RuntimeError(HTTP_ERROR_MESSAGES[last_status])
+                raise RuntimeError(f"请求失败: 重试 {DEFAULT_MAX_RETRIES} 次后仍然失败")
 
             print(f"[豆包生图] API 响应耗时 {elapsed_req:.1f}s，开始下载图像...")
 

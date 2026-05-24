@@ -14,6 +14,8 @@ import time
 
 import aiohttp
 
+from ..utils.http_error import HTTP_ERROR_MESSAGES, RETRYABLE_STATUS_CODES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR
+
 
 
 class BaseAPIClient(ABC):
@@ -206,7 +208,8 @@ class BaseAPIClient(ABC):
 
                 if response.status != 200:
                     error_text = await response.text()
-                    raise RuntimeError(error_text)
+                    # 返回状态码和错误文本，由外层处理重试
+                    return {"_error": True, "_status": response.status, "_text": error_text}
 
                 wait_start = time.time()
                 response_data = await response.json()
@@ -231,31 +234,55 @@ class BaseAPIClient(ABC):
                     return
 
         try:
-            if _interrupt_available:
-                request_task = asyncio.ensure_future(_do_request())
-                interrupt_task = asyncio.ensure_future(_poll_interrupt())
+            last_error_status = None
+            last_error_text = ""
 
-                done, pending = await asyncio.wait(
-                    [request_task, interrupt_task],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
+            for attempt in range(DEFAULT_MAX_RETRIES + 1):
+                if _interrupt_available:
+                    request_task = asyncio.ensure_future(_do_request())
+                    interrupt_task = asyncio.ensure_future(_poll_interrupt())
 
-                # 取消未完成的任务
-                for t in pending:
-                    t.cancel()
-                    try:
-                        await t
-                    except (asyncio.CancelledError, Exception):
-                        pass
+                    done, pending = await asyncio.wait(
+                        [request_task, interrupt_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
 
-                # 判断是哪个先完成
-                if interrupt_task in done and request_task not in done:
-                    raise InterruptProcessingException()
+                    for t in pending:
+                        t.cancel()
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
-                # 请求完成，取出结果（可能含异常）
-                return request_task.result()
-            else:
-                return await _do_request()
+                    if interrupt_task in done and request_task not in done:
+                        raise InterruptProcessingException()
+
+                    result = request_task.result()
+                else:
+                    result = await _do_request()
+
+                if isinstance(result, dict) and result.get("_error"):
+                    status = result["_status"]
+                    error_text = result["_text"]
+                    last_error_status = status
+                    last_error_text = error_text
+
+                    if status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
+                        friendly = HTTP_ERROR_MESSAGES.get(status, f"请求失败 ({status})")
+                        delay = _compute_delay(attempt, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR)
+                        print(f"{friendly} {delay:.1f}s 后重试 ({attempt+1}/{DEFAULT_MAX_RETRIES})...")
+                        await asyncio.sleep(delay)
+                        continue
+
+                    if status in HTTP_ERROR_MESSAGES:
+                        raise RuntimeError(HTTP_ERROR_MESSAGES[status])
+                    raise RuntimeError(error_text)
+
+                return result
+
+            if last_error_status and last_error_status in HTTP_ERROR_MESSAGES:
+                raise RuntimeError(HTTP_ERROR_MESSAGES[last_error_status])
+            raise RuntimeError(last_error_text)
 
         except InterruptProcessingException:
             raise
@@ -352,30 +379,16 @@ class BaseAPIClient(ABC):
                         custom = self.get_http_error_message(429, error_message)
                         if custom is not None:
                             raise RuntimeError(custom)
-                        raise RuntimeError(
-                            f"请求频率超限 (429 Too Many Requests)\n"
-                            f"API 返回错误：{error_message}\n"
-                            f"建议：等待一段时间后重试"
-                        )
+                        raise RuntimeError(HTTP_ERROR_MESSAGES[429])
                     elif response.status == 503:
                         custom = self.get_http_error_message(503, error_message)
                         if custom is not None:
                             raise RuntimeError(custom)
-                        raise RuntimeError(
-                            f"服务暂时不可用 (503 Service Unavailable)\n"
-                            f"API 返回错误：{error_message}\n"
-                            f"建议：稍后重试"
-                        )
+                        raise RuntimeError(HTTP_ERROR_MESSAGES[503])
                     elif response.status == 504:
-                        raise RuntimeError(
-                            f"API 请求超时 (504 Gateway Timeout)\n"
-                            f"API 返回错误：{error_message}\n"
-                            f"建议：稍后重试"
-                        )
+                        raise RuntimeError(HTTP_ERROR_MESSAGES[504])
                     elif response.status == 502:
-                        raise RuntimeError(
-                            "糟糕！请求到上游时遇到超时或过载！别担心，过会儿再次点击运行即可！"
-                        )
+                        raise RuntimeError(HTTP_ERROR_MESSAGES[502])
                     else:
                         raise RuntimeError(
                             f"API 请求失败 (状态码: {response.status})\n"

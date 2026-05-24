@@ -204,12 +204,14 @@ class OpenAIAPIClient(BaseAPIClient):
             "extra_body": {
                 "google": {
                     "image_config": {
-                        "aspect_ratio": aspect_ratio,
                         "image_size": api_image_size
                     }
                 }
             }
         }
+
+        if aspect_ratio and aspect_ratio != "智能":
+            request_body["extra_body"]["google"]["image_config"]["aspect_ratio"] = aspect_ratio
 
         return request_body
 

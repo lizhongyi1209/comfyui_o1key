@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Optional
 import aiohttp
 
 from ..utils.config import get_api_key_or_raise
+from ..utils.http_error import async_request_with_retry
 
 
 class SeedanceClient:
@@ -47,18 +48,11 @@ class SeedanceClient:
     ) -> str:
         """提交视频生成任务，返回 task_id"""
         url = f"{self.base_url}{self.CREATE_ENDPOINT}"
-        async with session.post(url, json=body, headers=self._headers()) as resp:
-            text = await resp.text()
-            if resp.status != 200:
-                try:
-                    err = json.loads(text)
-                    msg = (err.get("error", {}).get("message")
-                           or err.get("message")
-                           or text)
-                except Exception:
-                    msg = text
-                raise RuntimeError(f"提交失败 ({resp.status}): {msg}")
-            data = json.loads(text)
+        resp = await async_request_with_retry(
+            session, "POST", url, json=body, headers=self._headers(), prefix="Seedance 提交: "
+        )
+        text = await resp.text()
+        data = json.loads(text)
 
         # new-api 返回字段：id / task_id
         task_id = data.get("id") or data.get("task_id")

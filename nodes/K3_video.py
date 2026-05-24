@@ -11,8 +11,9 @@ import tempfile
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise, get_async_api_base_url
+from ..utils.config import get_api_key_or_raise, get_async_api_base_url, NETWORK_ROUTE_OPTIONS, get_base_url_by_route
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
+from ..utils.http_error import async_request_with_retry
 
 try:
     from comfy_api.latest import InputImpl
@@ -113,6 +114,7 @@ class K3Video:
             "时长":      ([5, 10, 15], {"default": 5}),
             "生成音频":  (["关闭", "打开"], {"default": "关闭"}),
             "模式":      (_MODES, {"default": "720p"}),
+            "网络线路":  (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
             "seed": ("INT", {
                 "default": 0, "min": 0, "max": 2147483647,
                 "tooltip": "seed 仅控制节点是否重新运行，结果本身不可复现。",
@@ -137,9 +139,9 @@ class K3Video:
     FUNCTION      = "generate"
     CATEGORY      = "comfyui_o1key/KVideo"
 
-    async def generate(self, 多镜头, 起始帧, 提示词, 负向提示词, 时长, 生成音频, 模式, seed, **kwargs):
+    async def generate(self, 多镜头, 起始帧, 提示词, 负向提示词, 时长, 生成音频, 模式, 网络线路, seed, **kwargs):
         api_key  = get_api_key_or_raise()
-        base_url = get_async_api_base_url()
+        base_url = get_base_url_by_route(网络线路)
         headers  = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
@@ -246,16 +248,11 @@ class K3Video:
             # 1. 提交
             _stage("submitting")
             create_url = f"{base_url}{_ENDPOINT_CREATE}"
-            async with session.post(create_url, json=body, headers=headers) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    try:
-                        err = json.loads(text)
-                        msg = err.get("error", {}).get("message") or err.get("message") or text
-                    except Exception:
-                        msg = text
-                    raise RuntimeError(f"K3 提交失败 ({resp.status}): {msg}")
-                create_resp = json.loads(text)
+            resp = await async_request_with_retry(
+                session, "POST", create_url, json=body, headers=headers, prefix="K3 提交: "
+            )
+            text = await resp.text()
+            create_resp = json.loads(text)
 
             task_id = (
                 create_resp.get("task_id")

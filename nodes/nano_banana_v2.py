@@ -30,7 +30,8 @@ from PIL import Image
 
 from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts
 from ..utils.file_utils import load_images_from_folder, pair_images_by_name, pair_images_cartesian
-from ..utils.config import get_api_key_or_raise
+from ..utils.config import get_api_key_or_raise, NETWORK_ROUTE_OPTIONS, get_base_url_by_route
+from ..utils.http_error import async_request_with_retry
 from ..models_config import (
     get_enabled_async_models,
     get_model_provider,
@@ -169,15 +170,16 @@ class NanoBananaV2:
                     "default": "一个中国女子的OOTD",
                     "multiline": True
                 }),
+                "网络线路": (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
                 "模型": (models, {"default": models[0]}),
-                "宽高比": (all_aspect_ratios, {"default": "1:1"}),
+                "宽高比": (["智能"] + all_aspect_ratios, {"default": "智能"}),
                 "分辨率": (all_resolutions, {"default": "2K"}),
                 "生图数量": ("INT", {
                     "default": 1,
                     "min": 1,
                     "max": 9,
                     "step": 1
-                })
+                }),
             },
             "optional": optional
         }
@@ -299,13 +301,11 @@ class NanoBananaV2:
             print(f"[异步提交] URL: {url}")
             print(f"[异步提交] 请求体: {json.dumps(_log_body, ensure_ascii=False)[:500]}")
 
-        async with session.post(url, json=request_body, headers=headers, proxy=provider.proxy_url) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                if not error_text.strip():
-                    error_text = "(服务器未返回错误详情)"
-                raise RuntimeError(f"提交任务失败 ({response.status}): {error_text}")
-            data = await response.json()
+        resp = await async_request_with_retry(
+            session, "POST", url, json=request_body, headers=headers,
+            proxy=provider.proxy_url, prefix="异步提交: "
+        )
+        data = await resp.json()
 
         if DEBUG_LOG_ENABLED:
             import json
@@ -541,6 +541,7 @@ class NanoBananaV2:
         宽高比: str,
         分辨率: str,
         生图数量: int,
+        网络线路: str = "全球加速",
         **kwargs
     ) -> Tuple[torch.Tensor]:
         """生成图像（异步模式）"""
@@ -557,6 +558,7 @@ class NanoBananaV2:
         proxy_url = BaseAsyncImageProvider.build_proxy_url(proxy_port)
         provider = self._get_provider(模型, proxy_url=proxy_url, api_key_override=api_key_override)
         provider.image_compression = "webp" if 图片质量 == "日常" else None
+        provider._route_base_url = get_base_url_by_route(网络线路)
 
         if proxy_url:
             print(f"{self.NODE_LABEL}: 已启用代理加速 -> {proxy_url}")
@@ -590,7 +592,7 @@ class NanoBananaV2:
 
             # 运行时验证宽高比
             supported_ratios = provider.get_model_aspect_ratios(模型)
-            if supported_ratios and 宽高比 not in supported_ratios:
+            if 宽高比 != "智能" and supported_ratios and 宽高比 not in supported_ratios:
                 raise ValueError(
                     f"宽高比 \"{宽高比}\" 与模型 \"{模型}\" 不兼容！\n"
                     f"该模型支持的宽高比：{', '.join(supported_ratios)}"
@@ -977,6 +979,7 @@ class NanoBananaV2Batch(NanoBananaV2):
         宽高比: str,
         分辨率: str,
         生图数量: int = 1,
+        网络线路: str = "全球加速",
         **kwargs
     ) -> Tuple[torch.Tensor]:
         """生成图像（异步模式 - 批量版：全并发 + 即时落盘）"""
@@ -997,6 +1000,7 @@ class NanoBananaV2Batch(NanoBananaV2):
         proxy_url = BaseAsyncImageProvider.build_proxy_url(proxy_port)
         provider = self._get_provider(模型, proxy_url=proxy_url, api_key_override=api_key_override)
         provider.image_compression = "webp" if 图片质量 == "日常" else None
+        provider._route_base_url = get_base_url_by_route(网络线路)
 
         if proxy_url:
             print(f"{self.NODE_LABEL}: 已启用代理加速 -> {proxy_url}")

@@ -21,6 +21,14 @@ DEFAULT_API_BASE_URL = "https://api.o1key.com"
 # 可通过环境变量 O1KEY_ASYNC_API_BASE_URL 覆盖
 DEFAULT_ASYNC_API_BASE_URL = "https://cf-api.o1key.com"
 
+# ============ 网络线路配置 ============
+NETWORK_ROUTES = {
+    "全球加速": "https://api.o1key.cn",
+    "CF加速": "https://cf-api.o1key.com",
+    "美国直连": "https://api.o1key.com",
+}
+NETWORK_ROUTE_OPTIONS = ["全球加速", "CF加速", "美国直连"]
+
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, str]:
     """
@@ -136,3 +144,8 @@ def get_async_api_base_url() -> str:
         return base_url.rstrip('/')
 
     return DEFAULT_ASYNC_API_BASE_URL
+
+
+def get_base_url_by_route(route: str) -> str:
+    """根据网络线路选项返回对应域名，未匹配则走 config 垫底"""
+    return NETWORK_ROUTES.get(route, get_api_base_url())

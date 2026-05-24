@@ -15,6 +15,7 @@ from ..clients.seedance_client import SeedanceClient
 from ..clients.gemini_client import GeminiAPIClient
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64, pil_to_tensor
 from ..utils.r2_uploader import upload_video, upload_audio
+from ..utils.config import NETWORK_ROUTE_OPTIONS, get_base_url_by_route
 
 from comfy_api.latest import InputImpl
 
@@ -116,6 +117,7 @@ class Seedance:
         return {
             "required": {
                 "提示词":           ("STRING", {"multiline": True, "default": ""}),
+                "网络线路":         (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
                 "模型":             (_MODELS, {"default": "doubao-seedance-2-0-260128"}),
                 "分辨率":           (_RESOLUTIONS, {"default": "720p"}),
                 "宽高比":           (["16:9", "adaptive", "9:16", "1:1", "4:3", "3:4", "21:9"],
@@ -242,6 +244,7 @@ class Seedance:
         _, save_path = tempfile.mkstemp(suffix=".mp4", prefix=f"{file_prefix}_")
 
         client            = SeedanceClient()
+        client.base_url   = get_base_url_by_route(kwargs.get("网络线路", "全球加速"))
         pbar              = _make_pbar()
         on_stage, on_prog = _make_callbacks(tag, pbar)
 
@@ -268,6 +271,7 @@ class SeedanceMultiModal:
         return {
             "required": {
                 "提示词":           ("STRING", {"multiline": True, "default": ""}),
+                "网络线路":         (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
                 "模型":             (_MODELS, {"default": "doubao-seedance-2-0-260128"}),
                 "分辨率":           (_RESOLUTIONS, {"default": "720p"}),
                 "宽高比":           (["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
@@ -414,6 +418,7 @@ class SeedanceMultiModal:
         _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="seedance_mm_")
 
         client            = SeedanceClient()
+        client.base_url   = get_base_url_by_route(kwargs.get("网络线路", "全球加速"))
         pbar              = _make_pbar()
         on_stage, on_prog = _make_callbacks("Seedance多模态", pbar)
 

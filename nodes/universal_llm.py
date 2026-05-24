@@ -17,7 +17,7 @@ import torch
 from PIL import Image
 
 from ..utils.image_utils import tensor_to_pil
-from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.config import get_api_key_or_raise, get_api_base_url, NETWORK_ROUTE_OPTIONS, get_base_url_by_route
 from ..utils.file_types import FileList
 
 # ============================================================================
@@ -66,6 +66,9 @@ class UniversalLLMChat:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "网络线路": (NETWORK_ROUTE_OPTIONS, {
+                    "default": "全球加速"
+                }),
                 "模型": (SUPPORTED_MODELS, {
                     "default": SUPPORTED_MODELS[0]
                 }),
@@ -370,6 +373,7 @@ class UniversalLLMChat:
         self,
         模型: str,
         提示词: str,
+        网络线路: str = "全球加速",
         图片: Optional[torch.Tensor] = None,
         视频=None,
         文件: Optional[FileList] = None,
@@ -380,6 +384,7 @@ class UniversalLLMChat:
 
         try:
             self._ensure_config()
+            self._base_url = get_base_url_by_route(网络线路)
 
             # 如果用户传入了自定义令牌，则覆盖默认 API Key
             effective_api_key = 令牌.strip() if 令牌 and 令牌.strip() else self._api_key

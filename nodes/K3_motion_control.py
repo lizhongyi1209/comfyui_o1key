@@ -13,9 +13,10 @@ import tempfile
 
 import aiohttp
 
-from ..utils.config import get_api_key_or_raise, get_async_api_base_url
+from ..utils.config import get_api_key_or_raise, get_async_api_base_url, NETWORK_ROUTE_OPTIONS, get_base_url_by_route
 from ..utils.r2_uploader import upload_video, upload_image
 from ..utils.image_utils import tensor_to_pil
+from ..utils.http_error import async_request_with_retry
 
 try:
     from comfy_api.latest import InputImpl
@@ -106,6 +107,7 @@ class K3MotionControl:
                 "参考图片":   ("IMAGE",),
                 "参考视频":   ("VIDEO",),
                 "提示词":     ("STRING", {"multiline": True, "default": ""}),
+                "网络线路":   (NETWORK_ROUTE_OPTIONS, {"default": "全球加速"}),
                 "模型":       (["v3", "v2-6"], {"default": "v3"}),
                 "模式":       (["720p", "1080p"], {"default": "1080p"}),
                 "时长":       ([5, 10, 15, 20, 25, 30], {"default": 5}),
@@ -123,9 +125,9 @@ class K3MotionControl:
     FUNCTION      = "generate"
     CATEGORY      = "comfyui_o1key/KVideo"
 
-    async def generate(self, 参考图片, 参考视频, 提示词, 保留原声, 角色朝向, 模式, 模型, 时长, seed, **kwargs):
+    async def generate(self, 参考图片, 参考视频, 提示词, 保留原声, 角色朝向, 模式, 模型, 时长, 网络线路, seed, **kwargs):
         api_key  = get_api_key_or_raise()
-        base_url = get_async_api_base_url()
+        base_url = get_base_url_by_route(网络线路)
         headers  = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
@@ -207,20 +209,13 @@ class K3MotionControl:
             # 1. 提交任务
             _stage("submitting")
             create_url = f"{base_url}{_ENDPOINT_CREATE}"
-            async with session.post(
-                create_url,
+            resp = await async_request_with_retry(
+                session, "POST", create_url,
                 data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                headers=headers,
-            ) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    try:
-                        err = json.loads(text)
-                        msg = err.get("message") or text
-                    except Exception:
-                        msg = text
-                    raise RuntimeError(f"K3 动作控制提交失败 ({resp.status}): {msg}")
-                create_resp = json.loads(text)
+                headers=headers, prefix="K3 动作控制提交: "
+            )
+            text = await resp.text()
+            create_resp = json.loads(text)
 
             # task_id 兼容扁平结构和 data 嵌套结构
             task_id = (

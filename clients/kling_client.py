@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Optional
 import aiohttp
 
 from ..utils.config import get_api_key_or_raise, get_api_base_url
+from ..utils.http_error import async_request_with_retry
 
 
 class KlingClient:
@@ -49,11 +50,11 @@ class KlingClient:
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{self.ENDPOINTS[endpoint_type]}"
 
-        async with session.post(url, json=body, headers=self._headers()) as resp:
-            text = await resp.text()
-            if resp.status != 200:
-                raise RuntimeError(f"提交失败 ({resp.status}): {text}")
-            return json.loads(text)
+        resp = await async_request_with_retry(
+            session, "POST", url, json=body, headers=self._headers(), prefix="Kling 提交: "
+        )
+        text = await resp.text()
+        return json.loads(text)
 
     # ── 轮询状态 ──────────────────────────────────────────────────────
 
@@ -203,17 +204,11 @@ class KlingClient:
             if on_stage:
                 on_stage("submitting")
             create_url = f"{self.base_url}{self.NEW_API_CREATE}"
-            async with session.post(create_url, json=body, headers=headers) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    # 尝试提取友好错误信息
-                    try:
-                        err = json.loads(text)
-                        msg = err.get("error", {}).get("message") or err.get("message") or text
-                    except Exception:
-                        msg = text
-                    raise RuntimeError(f"动作控制提交失败 ({resp.status}): {msg}")
-                create_resp = json.loads(text)
+            resp = await async_request_with_retry(
+                session, "POST", create_url, json=body, headers=headers, prefix="Kling 动作控制提交: "
+            )
+            text = await resp.text()
+            create_resp = json.loads(text)
 
             video_id = create_resp.get("id")
             if not video_id:

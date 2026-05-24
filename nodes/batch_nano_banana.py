@@ -1,11 +1,15 @@
 """
-批量 Nano Banana Pro 节点
+批量 Nano Banana 节点
 ComfyUI 自定义节点，用于批量处理图像生成任务
 支持多文件夹加载、1:1/笛卡尔积配对、智能命名保存
 """
 
+import io as _io
+import re
+import json
 import time
 import math
+import base64
 import random
 import asyncio
 import aiohttp
@@ -16,7 +20,7 @@ from PIL import Image
 import torch
 import numpy as np
 
-from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts, encode_image_to_base64, encode_image_to_base64_limited
 from ..utils.file_utils import (
     ImageInfo,
     load_images_from_folder,
@@ -25,9 +29,10 @@ from ..utils.file_utils import (
     generate_timestamp_filename,
     save_image,
 )
+from ..utils.config import NETWORK_ROUTE_OPTIONS, get_base_url_by_route, get_api_key_or_raise
+from ..utils.http_error import RETRYABLE_STATUS_CODES, HTTP_ERROR_MESSAGES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR
 from ..clients.gemini_client import GeminiAPIClient
 from ..models_config import (
-    get_enabled_models,
     get_model_supported_aspect_ratios, get_all_supported_aspect_ratios,
     get_model_supported_resolutions, get_all_supported_resolutions
 )
@@ -67,7 +72,146 @@ DEBUG_LOG_ENABLED = False
 REQUEST_LOG_ENABLED = False
 # ============================================================================
 
-_NODE = "Nano Banana Pro"
+_NODE = "Nano Banana"
+_ENDPOINT = "/v1/chat/completions"
+
+_IMAGE_RE = re.compile(r"!\[.*?\]\(data:image/(\w+);base64,([A-Za-z0-9+/=]+)\)")
+
+
+def _get_headers(api_key: str) -> dict:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-Accel-Buffering": "no",
+        "Cache-Control": "no-cache, no-transform",
+    }
+
+
+def _build_request_body(
+    prompt: str,
+    model: str,
+    aspect_ratio: str,
+    resolution: str,
+    images: Optional[List[Image.Image]] = None,
+    enable_grounding: bool = False,
+) -> dict:
+    content_parts = [{"type": "text", "text": prompt}]
+
+    if images:
+        for img in images:
+            b64 = encode_image_to_base64_limited(img, format="PNG")
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"}
+            })
+
+    body = {
+        "model": model,
+        "stream": True,
+        "messages": [{"role": "user", "content": content_parts}],
+    }
+
+    google_config = {
+        "image_config": {
+            "image_size": resolution,
+        }
+    }
+    if aspect_ratio and aspect_ratio != "智能":
+        google_config["image_config"]["aspect_ratio"] = aspect_ratio
+    body["extra_body"] = {"google": google_config}
+
+    if enable_grounding:
+        body["extra_body"]["google_search"] = True
+
+    return body
+
+
+async def _generate_single_openai(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    api_key: str,
+    prompt: str,
+    model: str,
+    resolution: str,
+    aspect_ratio: str,
+    images: Optional[List[Image.Image]] = None,
+    enable_grounding: bool = False,
+) -> List[Image.Image]:
+    url = f"{base_url}{_ENDPOINT}"
+    headers = _get_headers(api_key)
+    body = _build_request_body(
+        prompt=prompt,
+        model=model,
+        aspect_ratio=aspect_ratio,
+        resolution=resolution,
+        images=images,
+        enable_grounding=enable_grounding,
+    )
+
+    if REQUEST_LOG_ENABLED:
+        extra = json.dumps(body.get("extra_body", {}), ensure_ascii=False)
+        print(f"[请求] POST {url} | model={model} | extra_body={extra}")
+
+    last_status = None
+    for attempt in range(DEFAULT_MAX_RETRIES + 1):
+        resp = await session.post(url, headers=headers, json=body)
+        if resp.status == 200:
+            break
+        last_status = resp.status
+        if resp.status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
+            friendly = HTTP_ERROR_MESSAGES.get(resp.status, f"请求失败 ({resp.status})")
+            delay = _compute_delay(attempt, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR)
+            resp.close()
+            await asyncio.sleep(delay)
+            continue
+        error_text = await resp.text()
+        resp.close()
+        if resp.status in HTTP_ERROR_MESSAGES:
+            raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
+        try:
+            err_json = json.loads(error_text)
+            msg = err_json.get("error", {}).get("message", error_text[:200])
+        except Exception:
+            msg = error_text[:200]
+        raise RuntimeError(f"API 错误 ({resp.status}): {msg}")
+    else:
+        if last_status and last_status in HTTP_ERROR_MESSAGES:
+            raise RuntimeError(HTTP_ERROR_MESSAGES[last_status])
+        raise RuntimeError(f"API 错误: 重试 {DEFAULT_MAX_RETRIES} 次后仍然失败")
+
+    full_content = ""
+    buffer = ""
+    async for raw_chunk in resp.content.iter_any():
+        buffer += raw_chunk.decode("utf-8")
+        while "\n" in buffer:
+            line_str, buffer = buffer.split("\n", 1)
+            line_str = line_str.strip()
+            if not line_str or not line_str.startswith("data:"):
+                continue
+            data_str = line_str[5:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                if "content" in delta:
+                    full_content += delta["content"]
+            except (json.JSONDecodeError, IndexError):
+                continue
+    resp.close()
+
+    if not full_content:
+        raise RuntimeError("API 未返回有效内容")
+
+    matches = list(_IMAGE_RE.finditer(full_content))
+    if not matches:
+        raise RuntimeError(f"响应中未找到图片: {full_content[:100]}")
+
+    last_match = matches[-1]
+    img_data = base64.b64decode(last_match.group(2))
+    final_image = Image.open(_io.BytesIO(img_data)).convert("RGB")
+
+    return [final_image]
 
 
 def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.Tensor:
@@ -98,7 +242,7 @@ def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.
 
 class BatchNanoBananaPro:
     """
-    批量 Nano Banana Pro 节点
+    批量 Nano Banana 节点
     
     功能：
     - 从多个文件夹加载图片
@@ -116,26 +260,32 @@ class BatchNanoBananaPro:
     - 要添加/禁用模型，请编辑 models_config.py 文件
     """
     
-    # 支持的模型列表（从配置文件动态加载）
-    MODELS = None  # 将在 INPUT_TYPES 中动态获取
-    
-    # 支持的宽高比列表（全量：所有启用模型的并集，动态加载）
-    # 实际渲染时通过 get_all_supported_aspect_ratios() 获取
-    ASPECT_RATIOS = [
-        "1:1", "4:3", "3:4", "16:9", "9:16",
-        "2:3", "3:2", "4:5", "5:4", "21:9",
-        "1:4", "4:1", "1:8", "8:1"
-    ]
-    
-    # 支持的分辨率列表（全量兜底，实际由 get_all_supported_resolutions() 动态生成）
-    RESOLUTIONS = ["512px", "1K", "2K", "4K"]
-    
+    # 模型展示名到基础 ID 的映射
+    MODEL_DISPLAY_NAMES = ["Nano Banana Pro", "Nano Banana 2", "Nano Banana"]
+    MODEL_ID_MAP = {
+        "Nano Banana Pro": "nano-banana-pro",
+        "Nano Banana 2": "nano-banana-2",
+        "Nano Banana": "nano-banana",
+    }
+    # 计费后缀映射
+    BILLING_SUFFIX = {
+        "特价": "-次卡",
+        "官方": "-官方计费",
+    }
+    RESOLUTION_KEY_MAP = {
+        "512px": "0.5k",
+        "1K": "1k",
+        "2K": "2k",
+        "4K": "4k",
+    }
+    # 仅支持特价的模型
+    BILLING_SPECIAL_ONLY = {"nano-banana"}
+
     # 配对模式
     PAIRING_MODES = ["按相同图片命名", "1*N", "不配对"]
-    
+
     def __init__(self):
-        """初始化节点"""
-        self.client = None
+        pass
     
     def resize_to_megapixels(
         self,
@@ -181,33 +331,17 @@ class BatchNanoBananaPro:
     
     @classmethod
     def INPUT_TYPES(cls):
-        """
-        定义输入参数
-        
-        ComfyUI 节点规范：
-        - required: 必选参数
-        - optional: 可选参数
-        """
-        # 从配置文件动态获取启用的模型列表
-        enabled_models = get_enabled_models()
-        
-        # 如果没有启用的模型，使用空列表（会导致节点不可用，提示用户配置）
-        if not enabled_models:
-            enabled_models = ["请在 models_config.py 中启用至少一个模型"]
-        
-        # 动态获取所有启用模型支持的宽高比（去重合并）
         all_aspect_ratios = get_all_supported_aspect_ratios()
         if not all_aspect_ratios:
-            all_aspect_ratios = cls.ASPECT_RATIOS
-        
-        # 动态获取所有启用模型支持的分辨率（去重合并）
+            all_aspect_ratios = ["1:1", "4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "4:5", "5:4", "21:9", "1:4", "4:1", "1:8", "8:1"]
+
         all_resolutions = get_all_supported_resolutions()
         if not all_resolutions:
-            all_resolutions = cls.RESOLUTIONS
+            all_resolutions = ["512px", "1K", "2K", "4K"]
         
-        # 创建9个独立的图像输入
+        # 创建5个独立的图像输入
         optional_inputs = {}
-        for i in range(1, 10):  # 1-9
+        for i in range(1, 6):  # 1-5
             optional_inputs[f"参考图{i}"] = ("IMAGE",)
         
         # 图片配对模式移到可选参数
@@ -215,35 +349,29 @@ class BatchNanoBananaPro:
             "default": "不配对"
         })
 
-        optional_inputs["代理端口（如7897）"] = ("STRING", {
-            "default": "",
-            "multiline": False,
-            "placeholder": "本地代理端口，如 7897（Clash Verge）或 10808（v2rayN），留空不使用"
-        })
-        
         return {
             "required": {
                 "prompt": ("STRING", {
                     "default": "一个中国女子的OOTD",
                     "multiline": True
                 }),
-                "模型": (enabled_models, {
-                    "default": enabled_models[0]
+                "模型": (cls.MODEL_DISPLAY_NAMES, {
+                    "default": cls.MODEL_DISPLAY_NAMES[0]
                 }),
-                "宽高比": (all_aspect_ratios, {
-                    "default": "1:1"
+                "宽高比": (["智能"] + all_aspect_ratios, {
+                    "default": "智能"
                 }),
                 "分辨率": (all_resolutions, {
                     "default": "2K"
                 }),
-                "谷歌搜索（联网）": (["关闭", "打开"], {
-                    "default": "关闭"
+                "图片格式": (["原始", "JPEG", "PNG", "WebP"], {
+                    "default": "原始"
                 }),
-                "图片搜索（联网）": (["关闭", "打开"], {
-                    "default": "关闭"
+                "计费": (["特价", "官方"], {
+                    "default": "特价"
                 }),
-                "返回格式": (["url", "base64"], {
-                    "default": "url"
+                "网络": (NETWORK_ROUTE_OPTIONS, {
+                    "default": "全球加速"
                 }),
                 "seed": ("INT", {
                     "default": 0,
@@ -267,22 +395,6 @@ class BatchNanoBananaPro:
                     "multiline": False
                 }),
                 "文件夹5": ("STRING", {
-                    "default": "",
-                    "multiline": False
-                }),
-                "文件夹6": ("STRING", {
-                    "default": "",
-                    "multiline": False
-                }),
-                "文件夹7": ("STRING", {
-                    "default": "",
-                    "multiline": False
-                }),
-                "文件夹8": ("STRING", {
-                    "default": "",
-                    "multiline": False
-                }),
-                "文件夹9": ("STRING", {
                     "default": "",
                     "multiline": False
                 }),
@@ -403,8 +515,9 @@ class BatchNanoBananaPro:
     
     async def _generate_single_task(
         self,
-        client: GeminiAPIClient,
         session: aiohttp.ClientSession,
+        base_url: str,
+        api_key: str,
         prompt: str,
         model: str,
         resolution: str,
@@ -412,27 +525,12 @@ class BatchNanoBananaPro:
         images: List[ImageInfo],
         output_folder: str,
         task_index: int,
-        enable_grounding: bool = True,
-        enable_image_search: bool = False,
+        enable_grounding: bool = False,
         base_filename: str = None,
-        image_format: str = "url",
+        image_format: str = "原始",
     ) -> dict:
         """
-        执行单个生成任务
-        
-        Args:
-            client: API 客户端
-            session: aiohttp 会话
-            prompt: 提示词
-            model: 模型名称
-            resolution: 分辨率
-            aspect_ratio: 宽高比
-            images: 输入图片列表
-            output_folder: 输出文件夹
-            task_index: 任务索引
-        
-        Returns:
-            包含结果信息的字典
+        执行单个生成任务（OpenAI 兼容接口）
         """
         result = {
             "task_index": task_index,
@@ -440,34 +538,29 @@ class BatchNanoBananaPro:
             "success": False,
             "generated_count": 0,
             "saved_files": [],
-            "output_images": [],  # 无保存路径时存储内存图片
+            "output_images": [],
             "error": None
         }
-        
+
         try:
             # 准备输入图片
             input_pil_images = [info.image for info in images]
-            
-            # 调用 API 生成图片（固定生成1次）
+
+            # 调用 OpenAI 兼容接口生成图片
             generated_images = []
             try:
-                gen_result = await client.generate_single_async(
+                gen_images = await _generate_single_openai(
+                    session=session,
+                    base_url=base_url,
+                    api_key=api_key,
                     prompt=prompt,
                     model=model,
                     resolution=resolution,
                     aspect_ratio=aspect_ratio,
-                    images=input_pil_images,
-                    session=session,
-                    debug=DEBUG_LOG_ENABLED,
-                    debug_request=REQUEST_LOG_ENABLED,
+                    images=input_pil_images if input_pil_images else None,
                     enable_grounding=enable_grounding,
-                    enable_image_search=enable_image_search,
-                    image_format=image_format,
                 )
-                if gen_result:
-                    # 正确解包元组：第一个元素是图像列表，第二个是计时信息
-                    images_list, timing_info = gen_result
-                    generated_images.extend(images_list)
+                generated_images.extend(gen_images)
             except Exception as e:
                 import traceback
                 error_msg = str(e)
@@ -490,29 +583,54 @@ class BatchNanoBananaPro:
             
             # 保存生成的图片到磁盘（始终保存）
             import os
+
+            # 确定保存扩展名
+            _FORMAT_EXT_MAP = {"JPEG": ".jpg", "PNG": ".png", "WebP": ".webp"}
+            save_ext = _FORMAT_EXT_MAP.get(image_format, ".png")
+
             for i, gen_img in enumerate(generated_images):
+                # 格式转换：非"原始"时检测并转换
+                if image_format != "原始":
+                    src_format = (gen_img.format or "").upper()
+                    target_upper = image_format.upper()
+                    # JPEG 格式名在 PIL 中为 "JPEG"
+                    if src_format == "JPG":
+                        src_format = "JPEG"
+                    need_convert = (src_format != target_upper)
+                    if need_convert:
+                        if target_upper in ("JPEG", "WEBP") and gen_img.mode in ("RGBA", "LA", "P"):
+                            gen_img = gen_img.convert("RGB")
+
                 # 使用文件夹1图片的名称，如果重名则+1
                 if base_filename:
                     base_name = base_filename
                     counter = 0
                     while True:
                         if counter == 0:
-                            filename = f"{base_name}.png"
+                            filename = f"{base_name}{save_ext}"
                         else:
-                            filename = f"{base_name}+{counter}.png"
+                            filename = f"{base_name}+{counter}{save_ext}"
                         output_path = os.path.join(output_folder, filename)
                         if not os.path.exists(output_path):
                             break
                         counter += 1
                 else:
-                    # 如果没有base_filename，使用时间戳
                     output_path = generate_timestamp_filename(
                         output_folder=output_folder,
-                        extension=".png"
+                        extension=save_ext
                     )
-                save_image(gen_img, output_path)
+
+                # 保存时不压缩
+                if image_format == "JPEG":
+                    if gen_img.mode != "RGB":
+                        gen_img = gen_img.convert("RGB")
+                    gen_img.save(output_path, quality=100)
+                elif image_format == "WebP":
+                    gen_img.save(output_path, lossless=True)
+                else:
+                    save_image(gen_img, output_path)
+
                 result["saved_files"].append(output_path)
-                # 立即释放内存
                 gen_img = None
             
             # 只有生成了图片才标记为成功
@@ -533,37 +651,19 @@ class BatchNanoBananaPro:
         resolution: str,
         aspect_ratio: str,
         output_folder: str,
+        base_url: str,
+        api_key: str,
         pbar=None,
         prompts_per_task: Optional[List[str]] = None,
-        enable_grounding: bool = True,
-        enable_image_search: bool = False,
-        image_format: str = "url",
+        enable_grounding: bool = False,
+        image_format: str = "原始",
     ) -> List[dict]:
         """
-        异步批量处理所有任务 - 改进版：支持分批保存
-        
-        Args:
-            pairs: 配对后的图片组合
-            prompt: 提示词（单提示词模式时使用）
-            model: 模型名称
-            resolution: 分辨率
-            aspect_ratio: 宽高比
-            output_folder: 输出文件夹
-            pbar: ComfyUI 进度条
-            prompts_per_task: 每个任务对应的提示词列表（批量提示词模式时使用）
-        
-        Returns:
-            所有任务的结果列表
+        异步批量处理所有任务（OpenAI 兼容接口）
         """
-        if self.client is None:
-            self.client = GeminiAPIClient()
-        
         total_tasks = len(pairs)
         
         max_concurrent = 50
-        
-        # 分批保存的批次大小（与并发数一致）
-        save_batch_size = 10
         
         print(f"BatchNanoBananaPro: 检测到 {total_tasks} 个任务")
         
@@ -617,8 +717,9 @@ class BatchNanoBananaPro:
 
                     task = asyncio.create_task(
                         self._generate_single_task(
-                            client=self.client,
                             session=session,
+                            base_url=base_url,
+                            api_key=api_key,
                             prompt=task_prompt,
                             model=model,
                             resolution=resolution,
@@ -627,7 +728,6 @@ class BatchNanoBananaPro:
                             output_folder=output_folder,
                             task_index=start_idx + i,
                             enable_grounding=enable_grounding,
-                            enable_image_search=enable_image_search,
                             base_filename=base_filename,
                             image_format=image_format,
                         )
@@ -721,15 +821,14 @@ class BatchNanoBananaPro:
         文件夹3: str,
         文件夹4: str,
         文件夹5: str,
-        文件夹6: str,
-        文件夹7: str,
-        文件夹8: str,
-        文件夹9: str,
         seed: int,
         图片配对模式: str,
         模型: str,
+        计费: str,
         宽高比: str,
         分辨率: str,
+        图片格式: str,
+        网络: str,
         保存路径: str = "",
         **kwargs
     ) -> Tuple[torch.Tensor]:
@@ -738,14 +837,14 @@ class BatchNanoBananaPro:
         
         Args:
             prompt: 提示词
-            文件夹1-9: 图片文件夹路径
+            文件夹1-5: 图片文件夹路径
             seed: 随机种子
             保存路径: 输出保存路径
             图片配对模式: 1:1 或 1*N
             模型: 模型名称
             宽高比: 输出宽高比
             分辨率: 输出分辨率
-            **kwargs: 动态参考图输入 (参考图1-9)
+            **kwargs: 动态参考图输入 (参考图1-5)
         
         Returns:
             输出图像张量
@@ -753,10 +852,27 @@ class BatchNanoBananaPro:
         start_time = time.time()
         
         # 从 kwargs 提取搜索参数（界面显示为「关闭/打开」，转为 bool 供调用）
-        enable_grounding: bool = (kwargs.pop("谷歌搜索（联网）", "关闭") == "打开")
-        enable_image_search: bool = (kwargs.pop("图片搜索（联网）", "关闭") == "打开")
-        proxy_port: str = kwargs.pop("代理端口（如7897）", "")
-        image_format: str = kwargs.pop("返回格式", "url")
+        enable_grounding: bool = False
+
+        # 拼接实际模型 ID
+        base_model_id = self.MODEL_ID_MAP.get(模型, "nano-banana-pro")
+        if base_model_id == "nano-banana":
+            if 计费 == "官方":
+                raise ValueError(f"模型 \"{模型}\" 仅支持特价计费")
+            模型 = "nano-banana"
+        else:
+            res_key = self.RESOLUTION_KEY_MAP.get(分辨率, "2k")
+            is_official = (计费 == "官方")
+            if base_model_id == "nano-banana-pro" and res_key == "1k" and not is_official:
+                模型 = "nano-banana-pro"
+            elif base_model_id == "nano-banana-2" and res_key == "0.5k":
+                if is_official:
+                    raise ValueError("Nano Banana 2 的 512px 分辨率仅支持特价计费")
+                模型 = "nano-banana-2-0.5k"
+            else:
+                模型 = f"{base_model_id}-{res_key}"
+                if is_official:
+                    模型 += "-official"
 
 
         try:
@@ -767,7 +883,7 @@ class BatchNanoBananaPro:
             # 验证：至少需要填写一个文件夹路径
             has_any_folder = any(
                 f and f.strip()
-                for f in [文件夹1, 文件夹2, 文件夹3, 文件夹4, 文件夹5, 文件夹6, 文件夹7, 文件夹8, 文件夹9]
+                for f in [文件夹1, 文件夹2, 文件夹3, 文件夹4, 文件夹5]
             )
             if not has_any_folder:
                 raise ValueError("请至少填写一个文件夹路径，该节点专为批量文件夹处理设计")
@@ -782,26 +898,16 @@ class BatchNanoBananaPro:
             
             # 校验宽高比与模型的兼容性
             supported_ratios = get_model_supported_aspect_ratios(模型)
-            if supported_ratios and 宽高比 not in supported_ratios:
+            if 宽高比 != "智能" and supported_ratios and 宽高比 not in supported_ratios:
                 raise ValueError(
                     f"宽高比 \"{宽高比}\" 与模型 \"{模型}\" 不兼容！\n"
                     f"该模型支持的宽高比：{', '.join(supported_ratios)}"
                 )
             
-            # 校验图片搜索（联网）与模型的兼容性
-            # 仅 nano-banana-2-限时特价 和 gemini-3.1-flash-image-preview 支持图片搜索
-            IMAGE_SEARCH_UNSUPPORTED_MODELS = ["nano-banana-pro-次卡", "nano-banana-pro-官方计费", "gemini-3-pro-image-preview"]
-            if enable_image_search and 模型 in IMAGE_SEARCH_UNSUPPORTED_MODELS:
-                raise ValueError(
-                    f"模型 \"{模型}\" 不支持【图片搜索（联网）】功能！"
-                    f"请切换到 nano-banana-2-限时特价 或 gemini-3.1-flash-image-preview 后再使用"
-                )
-            
             # 加载文件夹图片
             print("BatchNanoBananaPro: 开始加载图片...")
             image_lists = self._load_folders(
-                文件夹1, 文件夹2, 文件夹3, 文件夹4,
-                文件夹5, 文件夹6, 文件夹7, 文件夹8, 文件夹9
+                文件夹1, 文件夹2, 文件夹3, 文件夹4, 文件夹5
             )
             
             # 验证文件夹是否有可用图片
@@ -811,7 +917,7 @@ class BatchNanoBananaPro:
             
             # 处理独立的参考图输入
             manual_images = []
-            for i in range(1, 10):  # 1-9
+            for i in range(1, 6):  # 1-5
                 key = f"参考图{i}"
                 if key in kwargs and kwargs[key] is not None:
                     pil_images = tensor_to_pil(kwargs[key])
@@ -848,11 +954,8 @@ class BatchNanoBananaPro:
             total_tasks = len(pairs)
             
             # 打印首行概览
-            # 图片搜索（联网）开启时隐含谷歌搜索接地，与客户端请求逻辑保持一致
             grounding_str = ""
-            if enable_image_search:
-                grounding_str = " | 谷歌图片搜索接地"
-            elif enable_grounding:
+            if enable_grounding:
                 grounding_str = " | 谷歌搜索接地"
             
             if batch_prompts:
@@ -890,18 +993,10 @@ class BatchNanoBananaPro:
                 except Exception as e:
                     raise ValueError(f"保存路径无效或无写入权限: {保存路径} - {str(e)}")
             
-            # 初始化 API 客户端
-            if self.client is None:
-                try:
-                    self.client = GeminiAPIClient()
-                except ValueError as e:
-                    raise ValueError(f"初始化 API 客户端失败: {str(e)}")
+            # 获取 API 密钥和基础 URL
+            api_key = get_api_key_or_raise("O1KEY_API_KEY")
+            base_url = get_base_url_by_route(网络)
 
-            # 注入代理设置（每次执行都刷新，支持用户中途修改端口）
-            self.client.proxy_url = GeminiAPIClient.build_proxy_url(proxy_port)
-            if self.client.proxy_url:
-                print(f"BatchNanoBananaPro: 已启用代理加速 → {self.client.proxy_url}")
-            
             # 判断是否使用默认 output 目录
             original_save_path = kwargs.get('保存路径', '')
             user_set_save_path = bool(original_save_path and original_save_path.strip())
@@ -920,11 +1015,12 @@ class BatchNanoBananaPro:
                             resolution=分辨率,
                             aspect_ratio=宽高比,
                             output_folder=保存路径,
+                            base_url=base_url,
+                            api_key=api_key,
                             pbar=pbar,
                             prompts_per_task=prompts_per_task,
                             enable_grounding=enable_grounding,
-                            enable_image_search=enable_image_search,
-                            image_format=image_format,
+                            image_format=图片格式,
                         )
                     )
                 except Exception as e:
@@ -1050,14 +1146,15 @@ class BatchNanoBananaPro:
         
         finally:
             # 查询余额
-            if self.client is not None:
-                try:
-                    balance_data = self.client.query_balance_sync()
-                    balance_info = self.client.format_balance_info(balance_data)
-                    print(f"BatchNanaBananaPro: {balance_info}")
-                    print("=" * 60)
-                except Exception:
-                    pass
+            try:
+                client = GeminiAPIClient()
+                client.base_url = get_base_url_by_route(网络)
+                balance_data = client.query_balance_sync()
+                balance_info = client.format_balance_info(balance_data)
+                print(f"BatchNanoBananaPro: {balance_info}")
+                print("=" * 60)
+            except Exception:
+                pass
             
             # 最终内存清理
             import gc
