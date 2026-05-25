@@ -24,9 +24,9 @@ class SaveImageFormat:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
-                "filename_prefix": ("STRING", {"default": "ComfyUI"}),
-                "format": (cls.FORMATS, {"default": "PNG"}),
+                "图像": ("IMAGE",),
+                "文件名前缀": ("STRING", {"default": "ComfyUI"}),
+                "输出格式": (cls.FORMATS, {"default": "PNG"}),
             },
             "optional": {},
             "hidden": {
@@ -43,8 +43,11 @@ class SaveImageFormat:
 
     _EXT_MAP = {"PNG": ".png", "JPEG": ".jpg", "WebP": ".webp"}
 
-    def save_images(self, images, filename_prefix="ComfyUI", format="PNG",
+    def save_images(self, 图像=None, 文件名前缀="ComfyUI", 输出格式="PNG",
                     prompt=None, extra_pnginfo=None):
+        images = 图像
+        filename_prefix = 文件名前缀
+        format = 输出格式
         full_output_folder, filename, counter, subfolder, filename_prefix = \
             folder_paths.get_save_image_path(
                 filename_prefix, self.output_dir,
