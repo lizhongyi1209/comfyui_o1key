@@ -26,6 +26,11 @@ HTTP_ERROR_MESSAGES = {
     504: "网关超时。请稍后重试。",
 }
 
+# 错误内容关键词 → 用户友好文案（优先于状态码匹配）
+ERROR_CONTENT_MESSAGES = {
+    "The current model has a high load": "模型过载，请稍后重试！",
+}
+
 # 可退避重试的状态码
 RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
@@ -37,7 +42,11 @@ DEFAULT_BACKOFF_FACTOR = 2.0  # 指数退避因子
 
 
 def get_friendly_message(status_code: int, raw_message: str = "") -> str:
-    """根据状态码返回友好文案，未匹配则返回原始信息"""
+    """根据状态码/错误内容返回友好文案，未匹配则返回原始信息"""
+    if raw_message:
+        for keyword, friendly_msg in ERROR_CONTENT_MESSAGES.items():
+            if keyword in raw_message:
+                return friendly_msg
     friendly = HTTP_ERROR_MESSAGES.get(status_code)
     if friendly:
         return friendly
@@ -119,7 +128,7 @@ async def async_request_with_retry(
         break
 
     if last_status and last_status in HTTP_ERROR_MESSAGES:
-        raise_for_status(last_status, prefix=prefix)
+        raise_for_status(last_status, raw_message=last_message, prefix=prefix)
 
-    raw_msg = last_message[:200] if last_message else ""
-    raise RuntimeError(f"{prefix}请求失败 ({last_status}): {raw_msg}")
+    friendly = get_friendly_message(last_status or 0, last_message)
+    raise RuntimeError(f"{prefix}{friendly}")

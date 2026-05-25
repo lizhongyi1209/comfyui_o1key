@@ -26,7 +26,12 @@ from PIL import Image
 
 from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
-from ..utils.http_error import RETRYABLE_STATUS_CODES, HTTP_ERROR_MESSAGES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR
+from ..utils.http_error import RETRYABLE_STATUS_CODES, HTTP_ERROR_MESSAGES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR, get_friendly_message
+
+# GPT Image 专属错误文案
+_GPT_ERROR_MESSAGES = {
+    500: "触发内容风控，或服务器繁忙！",
+}
 
 try:
     from comfy.model_management import processing_interrupted, InterruptProcessingException
@@ -346,6 +351,8 @@ class GptImageClient:
                                 print(f"[o1key GPT Image] {friendly} {delay:.1f}s 后重试 ({attempt+1}/{DEFAULT_MAX_RETRIES})...")
                                 await asyncio.sleep(delay)
                                 continue
+                            if resp.status in _GPT_ERROR_MESSAGES:
+                                raise RuntimeError(_GPT_ERROR_MESSAGES[resp.status])
                             if resp.status in HTTP_ERROR_MESSAGES:
                                 raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
                             try:
@@ -358,7 +365,7 @@ class GptImageClient:
                                 )
                             except Exception:
                                 msg = text
-                            raise RuntimeError(f"请求失败 HTTP {resp.status}: {msg}")
+                            raise RuntimeError(get_friendly_message(resp.status, msg))
 
                         try:
                             resp_json = json.loads(text)
@@ -462,6 +469,8 @@ class GptImageClient:
                     text = await resp.text()
 
                     if resp.status != 200:
+                        if resp.status in _GPT_ERROR_MESSAGES:
+                            raise RuntimeError(_GPT_ERROR_MESSAGES[resp.status])
                         if resp.status in HTTP_ERROR_MESSAGES:
                             raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
                         try:
@@ -474,7 +483,7 @@ class GptImageClient:
                             )
                         except Exception:
                             msg = text
-                        raise RuntimeError(f"请求失败 HTTP {resp.status}: {msg}")
+                        raise RuntimeError(get_friendly_message(resp.status, msg))
 
                     try:
                         resp_json = json.loads(text)

@@ -167,7 +167,11 @@ class O1keyGPTImage:
         # ── 2. 解析分辨率显示值 → API 参数值 ──────────────────────────────────
         size = "auto" if 分辨率 == "智能" else 分辨率.split("（")[0].strip()
 
-        # ── 2b. 解析质量显示值 → API 参数值 ───────────────────────────────────
+        # ── 2b. 解析模型显示值 → API 参数值 ───────────────────────────────────
+        _model_map = {"gpt-image-2-次卡": "gpt-image-2-c", "gpt-image-2-按量": "gpt-image-2"}
+        model = _model_map.get(模型, 模型)
+
+        # ── 2c. 解析质量显示值 → API 参数值 ───────────────────────────────────
         _quality_map = {"高": "high", "中": "medium", "低": "low", "自动": "auto"}
         quality = _quality_map.get(质量, "auto")
 
@@ -199,7 +203,7 @@ class O1keyGPTImage:
                     try:
                         pil_images = client.run_sync(
                             prompt=p,
-                            model=模型,
+                            model=model,
                             quality=quality,
                             size=size,
                             n=生图数量,
@@ -223,7 +227,7 @@ class O1keyGPTImage:
                 try:
                     pil_images = client.run_sync(
                         prompt=prompt,
-                        model=模型,
+                        model=model,
                         quality=quality,
                         size=size,
                         n=生图数量,

@@ -14,7 +14,7 @@ import time
 
 import aiohttp
 
-from ..utils.http_error import HTTP_ERROR_MESSAGES, RETRYABLE_STATUS_CODES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR
+from ..utils.http_error import HTTP_ERROR_MESSAGES, RETRYABLE_STATUS_CODES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR, get_friendly_message
 
 
 
@@ -276,13 +276,13 @@ class BaseAPIClient(ABC):
 
                     if status in HTTP_ERROR_MESSAGES:
                         raise RuntimeError(HTTP_ERROR_MESSAGES[status])
-                    raise RuntimeError(error_text)
+                    raise RuntimeError(get_friendly_message(status, error_text))
 
                 return result
 
             if last_error_status and last_error_status in HTTP_ERROR_MESSAGES:
                 raise RuntimeError(HTTP_ERROR_MESSAGES[last_error_status])
-            raise RuntimeError(last_error_text)
+            raise RuntimeError(get_friendly_message(last_error_status or 0, last_error_text))
 
         except InterruptProcessingException:
             raise
