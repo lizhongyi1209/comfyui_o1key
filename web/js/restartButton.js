@@ -56,12 +56,21 @@ app.registerExtension({
             const maxAttempts = 40;
             const interval = setInterval(async () => {
                 attempts++;
-                if (attempts > maxAttempts) { clearInterval(interval); location.reload(); return; }
+                if (attempts > maxAttempts) { clearInterval(interval); forceReload(); return; }
                 try {
                     const r = await fetch("/api/system_stats", { signal: AbortSignal.timeout(2000) });
-                    if (r.ok) { clearInterval(interval); location.reload(); }
+                    if (r.ok) { clearInterval(interval); forceReload(); }
                 } catch {}
             }, 1500);
+        }
+
+        function forceReload() {
+            window.onbeforeunload = null;
+            Object.defineProperty(BeforeUnloadEvent.prototype, "returnValue", {
+                get() { return ""; },
+                set() {}
+            });
+            location.reload();
         }
 
         const observer = new MutationObserver(inject);

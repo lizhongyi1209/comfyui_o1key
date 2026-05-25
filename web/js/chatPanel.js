@@ -5,6 +5,7 @@ const STORAGE_KEY = "o1key-chat-conversations";
 let conversations = [];
 let activeConvId = null;
 let currentModel = "gpt-5.5";
+let currentReasoning = "medium";
 let isStreaming = false;
 let isThinking = false;
 let abortController = null;
@@ -41,13 +42,22 @@ function classifyFileByName(filename) {
     return "document";
 }
 
+function truncateFilename(name, maxLen = 20) {
+    if (!name || name.length <= maxLen) return name || "";
+    const ext = name.lastIndexOf(".") > 0 ? name.slice(name.lastIndexOf(".")) : "";
+    const base = name.slice(0, name.length - ext.length);
+    const keep = maxLen - ext.length - 2;
+    if (keep <= 3) return name.slice(0, maxLen - 2) + "..." + ext;
+    return base.slice(0, keep) + "..." + ext;
+}
+
 const MODELS = [
     "gpt-5.5",
+    "gemini-3.5-flash",
     "gemini-3.1-pro-preview",
     "deepseek-v4-pro",
     "claude-opus-4-7",
     "claude-opus-4-6",
-    "gemini-3.5-flash",
     "doubao-seed-2.0-pro",
 ];
 
@@ -77,6 +87,13 @@ function formatTime(ts) {
     return `${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function formatDuration(seconds) {
+    const s = Math.round(seconds);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `0:${String(sec).padStart(2, "0")}`;
+}
+
 // ─── Marked.js lazy load ─────────────────────────────────────────────────────
 function ensureMarked() {
     if (markedReady || window.marked) { markedReady = true; return; }
@@ -98,8 +115,9 @@ const CSS = `
 #o1key-chat-header .chat-hdr-btn.active{color:#ddd;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2)}
 #o1key-chat-toolbar{padding:10px 14px;display:flex;gap:6px;flex-shrink:0}
 #o1key-chat-toolbar select{flex:1;background:rgba(255,255,255,.08);color:#ddd;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:8px 32px 8px 12px;font-size:13px;font-weight:500;outline:none;cursor:pointer;transition:all .15s;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23999' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
-#o1key-chat-toolbar select:hover{border-color:rgba(255,255,255,.22);background:rgba(255,255,255,.1)}
-#o1key-chat-toolbar select:focus{border-color:rgba(255,255,255,.3);background:rgba(255,255,255,.1)}
+#o1key-chat-toolbar select:hover{border-color:rgba(255,255,255,.22);background-color:rgba(255,255,255,.1)}
+#o1key-chat-toolbar select:focus{border-color:rgba(255,255,255,.3);background-color:rgba(255,255,255,.1)}
+#o1key-chat-toolbar #o1k-reasoning-sel{flex:none;width:auto;padding-right:28px}
 #o1key-chat-toolbar select option{background:#2a2a2a;color:#ddd;padding:8px}
 #o1key-chat-messages{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:2px;scroll-behavior:smooth;min-height:0}
 #o1key-chat-messages::-webkit-scrollbar{width:4px}
@@ -118,6 +136,7 @@ const CSS = `
 .o1k-msg a{color:#7eb8f7;text-decoration:none}
 .o1k-msg img{max-width:180px;max-height:140px;border-radius:8px;margin:4px 0;cursor:pointer;border:1px solid rgba(255,255,255,.06)}
 .o1k-msg-time{font-size:10px;color:#555;padding:0 4px;user-select:none}
+.o1k-msg-model{font-size:10px;color:#666;padding:0 4px 2px;user-select:none;font-weight:500}
 .o1k-msg-actions{position:relative;top:auto;opacity:0;transition:opacity .15s;display:flex;gap:2px;padding:2px 4px}
 .o1k-msg-wrap.user .o1k-msg-actions{justify-content:flex-end}
 .o1k-msg-wrap.assistant .o1k-msg-actions{justify-content:flex-start}
@@ -168,7 +187,8 @@ const CSS = `
 #o1key-chat-previews .preview-thumb{position:relative;width:40px;height:40px;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,.1)}
 #o1key-chat-previews .preview-thumb img,#o1key-chat-previews .preview-thumb video{width:100%;height:100%;object-fit:cover}
 #o1key-chat-previews .preview-thumb .remove-btn{position:absolute;top:-2px;right:-2px;width:14px;height:14px;background:rgba(200,60,60,.85);color:#fff;border:none;border-radius:50%;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
-#o1key-chat-previews .preview-thumb.video-preview{width:60px}
+#o1key-chat-previews .preview-thumb.video-preview{width:auto;height:auto;max-height:none}
+#o1key-chat-previews .preview-thumb.video-preview img,#o1key-chat-previews .preview-thumb.video-preview video{width:auto;height:50px;max-height:none;object-fit:contain}
 #o1key-chat-previews .preview-thumb.video-preview::after{content:"";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.3);pointer-events:none}
 #o1key-chat-previews .preview-thumb.video-preview .play-badge{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:16px;height:16px;background:rgba(255,255,255,.85);border-radius:50%;display:flex;align-items:center;justify-content:center;pointer-events:none}
 #o1key-chat-previews .preview-thumb.video-preview .play-badge::after{content:"";border-style:solid;border-width:4px 0 4px 7px;border-color:transparent transparent transparent #333;margin-left:1px}
@@ -179,9 +199,12 @@ const CSS = `
 .o1k-msg .file-chip .chip-icon{font-size:14px}
 .o1k-msg .file-chip .chip-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .o1k-msg .video-thumb{position:relative;display:inline-block;max-width:160px;border-radius:8px;overflow:hidden;margin:4px 0;border:1px solid rgba(255,255,255,.08)}
-.o1k-msg .video-thumb img{width:100%;display:block;border-radius:8px}
-.o1k-msg .video-thumb .play-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.25)}
+.o1k-msg .video-thumb img{width:100%;max-width:none;max-height:none;display:block;border:none;margin:0;border-radius:0}
+.o1k-msg .video-thumb .play-overlay{position:absolute;inset:0;bottom:24px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.25)}
 .o1k-msg .video-thumb .play-overlay::after{content:"";border-style:solid;border-width:8px 0 8px 14px;border-color:transparent transparent transparent rgba(255,255,255,.9)}
+.o1k-msg .video-thumb .video-duration{position:absolute;bottom:28px;right:4px;padding:1px 5px;font-size:10px;color:#fff;background:rgba(0,0,0,.7);border-radius:3px;line-height:1.4}
+.o1k-msg .video-thumb .video-filename{position:relative;padding:3px 6px;font-size:10px;color:#bbb;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgba(0,0,0,.45);border-radius:0 0 8px 8px}
+.o1k-msg .video-thumb.video-thumb-placeholder{width:120px;height:80px;background:rgba(255,255,255,.06);display:flex;flex-direction:column;align-items:center;justify-content:center}
 #o1key-chat-input-box{display:flex;align-items:flex-end;gap:0;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:6px 6px 6px 12px;transition:border-color .2s}
 #o1key-chat-input-box:focus-within{border-color:rgba(255,255,255,.22)}
 #o1key-chat-input-box textarea{flex:1;background:transparent;color:#e0e0e0;border:none;padding:6px 0;font-size:13px;resize:none;outline:none;min-height:20px;max-height:100px;line-height:1.5}
@@ -244,7 +267,8 @@ function renderChatPanel(container) {
             </div>
         </div>
         <div id="o1key-chat-toolbar">
-            <select id="o1k-model-sel">${MODELS.map(m => `<option value="${m}"${m === currentModel ? " selected" : ""}>${m}${m === "gemini-3.1-pro-preview" ? " (支持视频)" : ""}</option>`).join("")}</select>
+            <select id="o1k-model-sel">${MODELS.map(m => `<option value="${m}"${m === currentModel ? " selected" : ""}>${m}</option>`).join("")}</select>
+            <select id="o1k-reasoning-sel"><option value="low"${currentReasoning === "low" ? " selected" : ""}>思考:低</option><option value="medium"${currentReasoning === "medium" ? " selected" : ""}>思考:中</option><option value="high"${currentReasoning === "high" ? " selected" : ""}>思考:高</option></select>
         </div>
         <div id="o1key-chat-messages"></div>
         <div id="o1key-chat-history" style="display:none"></div>
@@ -271,6 +295,7 @@ function renderChatPanel(container) {
 // ─── Event Binding ───────────────────────────────────────────────────────────
 function bindEvents(root) {
     const modelSel = root.querySelector("#o1k-model-sel");
+    const reasoningSel = root.querySelector("#o1k-reasoning-sel");
     const newBtn = root.querySelector("#o1k-new-chat");
     const histBtn = root.querySelector("#o1k-history-btn");
     const input = root.querySelector("#o1k-input");
@@ -279,6 +304,7 @@ function bindEvents(root) {
     const fileInput = root.querySelector("#o1k-file-input");
 
     modelSel.addEventListener("change", () => { currentModel = modelSel.value; });
+    reasoningSel.addEventListener("change", () => { currentReasoning = reasoningSel.value; });
     newBtn.addEventListener("click", startNewConversation);
     histBtn.addEventListener("click", toggleHistory);
 
@@ -437,10 +463,11 @@ function enterEditMode(idx) {
     msgEl.querySelector(".o1k-edit-save").addEventListener("click", () => {
         const newText = ta.value.trim();
         if (!newText) return;
+        const originalFiles = extractFilesFromContent(msg.content);
         conv.messages.splice(idx);
         conv.updatedAt = Date.now();
         saveConversations();
-        sendMessage(newText, []);
+        sendMessage(newText, originalFiles);
     });
 }
 
@@ -450,11 +477,11 @@ function retryMessage(idx) {
     if (!conv) return;
     const msg = conv.messages[idx];
     if (!msg || msg.role !== "user") return;
-    const text = extractTextFromContent(msg.content);
+    const originalContent = msg.content;
     conv.messages.splice(idx);
     conv.updatedAt = Date.now();
     saveConversations();
-    sendMessage(text, []);
+    sendMessage(null, [], originalContent);
 }
 
 function extractTextFromContent(content) {
@@ -464,6 +491,24 @@ function extractTextFromContent(content) {
         return textPart?.text || "";
     }
     return "";
+}
+
+function extractFilesFromContent(content) {
+    if (!Array.isArray(content)) return [];
+    const files = [];
+    for (const part of content) {
+        if (part._stripped) continue;
+        if (part.type === "image_url" && part.image_url) {
+            const url = part.image_url.url;
+            if (!url || url === "[image]" || url === "[video]") continue;
+            files.push({ category: part._video ? "video" : "image", dataUrl: url, thumb: part._thumb || null, name: part._name || null });
+        } else if (part.type === "input_audio" && part.input_audio?.data) {
+            files.push({ category: "audio", dataUrl: "data:audio/" + (part.input_audio.format || "mp3") + ";base64," + part.input_audio.data, name: "audio." + (part.input_audio.format || "mp3") });
+        } else if (part.type === "file" && part.file?.file_data) {
+            files.push({ category: "file", dataUrl: part.file.file_data, name: part.file.filename });
+        }
+    }
+    return files;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -492,33 +537,185 @@ function captureImageThumb(dataUrl) {
     });
 }
 
-function captureVideoThumb(dataUrl) {
+function compressImageForApi(dataUrl) {
+    const MAX_DIM = 1568;
     return new Promise((resolve) => {
-        const timeout = setTimeout(() => resolve(null), 5000);
+        const img = new Image();
+        img.onload = () => {
+            try {
+                let w = img.width, h = img.height;
+                const maxDim = Math.max(w, h);
+                if (maxDim > MAX_DIM) {
+                    const scale = MAX_DIM / maxDim;
+                    w = Math.round(w * scale);
+                    h = Math.round(h * scale);
+                }
+                const canvas = document.createElement("canvas");
+                canvas.width = w;
+                canvas.height = h;
+                canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+                resolve(canvas.toDataURL("image/jpeg", 0.85));
+            } catch { resolve(dataUrl); }
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+    });
+}
+
+function extractVideoFrames(dataUrl, fileName) {
+    const MAX_FRAME_DIM = 768;
+    const TIMEOUT_MS = 30000;
+    return new Promise(async (resolve) => {
+        // Convert data URL to Blob and upload to server for same-origin playback
+        let videoSrc = null;
+        try {
+            const resp = await fetch(dataUrl);
+            const blob = await resp.blob();
+            const formData = new FormData();
+            formData.append("image", blob, fileName || "video.mp4");
+            formData.append("type", "temp");
+            formData.append("overwrite", "true");
+            const uploadResp = await fetch("/upload/image", { method: "POST", body: formData });
+            if (uploadResp.ok) {
+                const data = await uploadResp.json();
+                videoSrc = `/view?filename=${encodeURIComponent(data.name)}&type=temp${data.subfolder ? "&subfolder=" + encodeURIComponent(data.subfolder) : ""}`;
+            }
+        } catch (e) { console.warn("[VideoFrames] upload error:", e); }
+        if (!videoSrc) { resolve(null); return; }
+
+        const timeout = setTimeout(() => {
+            console.warn("[VideoFrames] timeout");
+            cleanup();
+            resolve(null);
+        }, TIMEOUT_MS);
         const video = document.createElement("video");
         video.preload = "auto";
         video.muted = true;
         video.playsInline = true;
-        video.crossOrigin = "anonymous";
-        const done = () => {
+        const cleanup = () => {
             clearTimeout(timeout);
-            try {
-                const canvas = document.createElement("canvas");
-                const w = Math.min(video.videoWidth || 320, 320);
-                const h = video.videoHeight ? Math.round(w * video.videoHeight / video.videoWidth) : 180;
-                canvas.width = w;
-                canvas.height = h;
-                canvas.getContext("2d").drawImage(video, 0, 0, w, h);
-                resolve(canvas.toDataURL("image/jpeg", 0.6));
-            } catch { resolve(null); }
+            video.onloadedmetadata = null;
+            video.onseeked = null;
+            video.onerror = null;
             video.src = "";
             video.load();
         };
-        video.onloadeddata = () => {
-            if (video.readyState >= 2) done();
+        video.onerror = () => { cleanup(); resolve(null); };
+        video.onloadedmetadata = () => {
+            const duration = video.duration;
+            if (!duration || !isFinite(duration)) { cleanup(); resolve(null); return; }
+            if (duration > 300) { cleanup(); resolve(null); return; }
+            let interval;
+            if (duration <= 20) interval = 0.25;
+            else if (duration <= 60) interval = 1;
+            else if (duration <= 120) interval = 2;
+            else interval = 5;
+            const times = [];
+            for (let t = 0; t < duration; t += interval) times.push(t);
+            if (times.length === 0) times.push(0);
+            if (times.length > 60) times.length = 60;
+            const frames = [];
+            let idx = 0;
+            const captureNext = () => {
+                if (idx >= times.length) {
+                    cleanup();
+                    resolve({ frames, duration, count: frames.length });
+                    return;
+                }
+                video.currentTime = times[idx];
+            };
+            video.onseeked = () => {
+                try {
+                    const vw = video.videoWidth || 640;
+                    const vh = video.videoHeight || 360;
+                    let w = vw, h = vh;
+                    const maxDim = Math.max(w, h);
+                    if (maxDim > MAX_FRAME_DIM) {
+                        const scale = MAX_FRAME_DIM / maxDim;
+                        w = Math.round(w * scale);
+                        h = Math.round(h * scale);
+                    }
+                    const canvas = document.createElement("canvas");
+                    canvas.width = w;
+                    canvas.height = h;
+                    canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+                    const frameDataUrl = canvas.toDataURL("image/jpeg", 0.7);
+                    frames.push(frameDataUrl);
+                } catch (e) {
+                    console.warn("[VideoFrames] frame error:", e);
+                }
+                idx++;
+                captureNext();
+            };
+            captureNext();
         };
-        video.onerror = () => { clearTimeout(timeout); resolve(null); };
-        video.src = dataUrl;
+        video.src = videoSrc;
+        video.load();
+    });
+}
+
+function captureVideoThumb(source) {
+    console.log("[VideoThumb] start, source type:", source instanceof File ? "File" : source instanceof Blob ? "Blob" : "string", source instanceof File ? source.name : "");
+    return new Promise(async (resolve) => {
+        let serverFile = null;
+        // Upload to ComfyUI server to get a same-origin URL (bypass CSP)
+        if (source instanceof File || source instanceof Blob) {
+            try {
+                const formData = new FormData();
+                formData.append("image", source, source.name || "video.mp4");
+                formData.append("type", "temp");
+                formData.append("overwrite", "true");
+                const resp = await fetch("/upload/image", { method: "POST", body: formData });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    serverFile = `/view?filename=${encodeURIComponent(data.name)}&type=temp${data.subfolder ? "&subfolder=" + encodeURIComponent(data.subfolder) : ""}`;
+                    console.log("[VideoThumb] uploaded, server URL:", serverFile);
+                } else {
+                    console.warn("[VideoThumb] upload failed:", resp.status);
+                }
+            } catch (e) { console.warn("[VideoThumb] upload error:", e); }
+        }
+        const videoSrc = serverFile || (typeof source === "string" ? source : null);
+        if (!videoSrc) { resolve(null); return; }
+
+        const timeout = setTimeout(() => { console.warn("[VideoThumb] timeout after 8s"); cleanup(); resolve(null); }, 8000);
+        const video = document.createElement("video");
+        video.preload = "auto";
+        video.muted = true;
+        video.playsInline = true;
+        const cleanup = () => {
+            clearTimeout(timeout);
+            video.onloadedmetadata = null;
+            video.onseeked = null;
+            video.onerror = null;
+            video.src = "";
+            video.load();
+        };
+        const capture = () => {
+            console.log("[VideoThumb] capture: videoWidth=", video.videoWidth, "videoHeight=", video.videoHeight, "currentTime=", video.currentTime);
+            try {
+                const vw = video.videoWidth || 320;
+                const vh = video.videoHeight || 180;
+                const w = Math.min(vw, 320);
+                const h = Math.round(w * vh / vw);
+                const canvas = document.createElement("canvas");
+                canvas.width = w;
+                canvas.height = h;
+                canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+                const result = canvas.toDataURL("image/jpeg", 0.6);
+                console.log("[VideoThumb] success, canvas:", w, "x", h);
+                cleanup();
+                resolve(result);
+            } catch (e) { console.error("[VideoThumb] capture error:", e); cleanup(); resolve(null); }
+        };
+        video.onloadedmetadata = () => {
+            console.log("[VideoThumb] loadedmetadata: duration=", video.duration, "size=", video.videoWidth, "x", video.videoHeight);
+            const seekTo = Math.min(video.duration * 0.1, 0.5);
+            video.currentTime = seekTo > 0 ? seekTo : 0.01;
+        };
+        video.onseeked = () => { console.log("[VideoThumb] seeked"); capture(); };
+        video.onerror = (e) => { console.error("[VideoThumb] video error:", video.error?.message, video.error?.code); cleanup(); resolve(null); };
+        video.src = videoSrc;
         video.load();
     });
 }
@@ -537,7 +734,7 @@ function addFile(file) {
         pendingFiles.push(entry);
         renderPreviews();
         if (category === "video") {
-            captureVideoThumb(e.target.result).then(thumb => {
+            captureVideoThumb(file).then(thumb => {
                 entry.thumb = thumb;
                 renderPreviews();
             });
@@ -581,11 +778,19 @@ function handleSend() {
 
 // ─── Send Message (Streaming) ────────────────────────────────────────────────
 function stripFileDataForStorage(conv) {
-    for (const msg of conv.messages) {
+    let lastUserIdx = -1;
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+        if (conv.messages[i].role === "user" && Array.isArray(conv.messages[i].content)) {
+            lastUserIdx = i; break;
+        }
+    }
+    for (let i = 0; i < conv.messages.length; i++) {
+        const msg = conv.messages[i];
         if (!Array.isArray(msg.content)) continue;
+        if (i === lastUserIdx) continue;
         msg.content = msg.content.map(part => {
             if (part.type === "image_url" && part._video && part.image_url?.url?.startsWith("data:")) {
-                return { type: "image_url", _video: true, _stripped: true, _thumb: part._thumb || null, image_url: { url: "[video]" } };
+                return { type: "image_url", _video: true, _stripped: true, _thumb: part._thumb || null, _name: part._name || null, _duration: part._duration || null, image_url: { url: "[video]" } };
             }
             if (part.type === "image_url" && part.image_url?.url?.startsWith("data:")) {
                 return { type: "image_url", image_url: { url: "[image]" }, _stripped: true, _thumb: part._thumb || null };
@@ -630,7 +835,7 @@ function buildFileContentPart(file) {
         return { type: "image_url", image_url: { url: file.dataUrl }, _thumb: file.thumb || null };
     }
     if (file.category === "video") {
-        return { type: "image_url", image_url: { url: file.dataUrl }, _video: true, _thumb: file.thumb || null };
+        return { type: "image_url", image_url: { url: file.dataUrl }, _video: true, _thumb: file.thumb || null, _name: file.name || null };
     }
     if (file.category === "audio") {
         const base64 = file.dataUrl.split(",")[1] || "";
@@ -641,30 +846,66 @@ function buildFileContentPart(file) {
     return { type: "file", file: { filename: file.name, file_data: file.dataUrl } };
 }
 
-async function sendMessage(text, files) {
+async function sendMessage(text, files, rawContent) {
     const conv = getActiveConv();
     if (!conv) return;
-    for (const f of files) {
-        if (f.category === "video" && !f.thumb && f.dataUrl) {
-            f.thumb = await captureVideoThumb(f.dataUrl);
-        }
-        if (f.category === "image" && !f.thumb && f.dataUrl) {
-            f.thumb = await captureImageThumb(f.dataUrl);
-        }
-    }
     let content;
-    if (files.length > 0) {
-        content = [];
-        for (const f of files) content.push(buildFileContentPart(f));
-        if (text) content.push({ type: "text", text });
-    } else { content = text; }
+    if (rawContent !== undefined) {
+        content = rawContent;
+    } else {
+        for (const f of files) {
+            if (f.category === "video" && !f.thumb && f.dataUrl) {
+                f.thumb = await captureVideoThumb(f.dataUrl);
+            }
+            if (f.category === "image" && !f.thumb && f.dataUrl) {
+                f.thumb = await captureImageThumb(f.dataUrl);
+            }
+        }
+        if (files.length > 0) {
+            content = [];
+            for (const f of files) {
+                if (f.category === "video") {
+                    const result = await extractVideoFrames(f.dataUrl, f.name);
+                    if (result && result.frames.length > 0) {
+                        content.push({ type: "text", text: `[视频: ${f.name || "video"}, 时长${Math.round(result.duration)}秒, ${result.count}帧]`, _hidden: true });
+                        const firstFrameIdx = content.length;
+                        for (let fi = 0; fi < result.frames.length; fi++) {
+                            content.push({ type: "image_url", image_url: { url: result.frames[fi], detail: "low" }, _hidden: fi > 0 });
+                        }
+                        content[firstFrameIdx]._video = true;
+                        content[firstFrameIdx]._thumb = f.thumb || null;
+                        content[firstFrameIdx]._name = f.name || null;
+                        content[firstFrameIdx]._videoFrames = true;
+                        content[firstFrameIdx]._duration = result.duration;
+                        content[firstFrameIdx]._hidden = false;
+                    } else {
+                        content.push(buildFileContentPart(f));
+                    }
+                } else {
+                    content.push(buildFileContentPart(f));
+                }
+            }
+            if (text) content.push({ type: "text", text });
+        } else { content = text; }
+    }
+
+    const title = typeof content === "string" ? content : extractTextFromContent(content);
 
     conv.messages.push({ role: "user", content, time: Date.now() });
-    conv.messages.push({ role: "assistant", content: "", time: Date.now() });
-    if (conv.title === "新对话" && text) conv.title = text.slice(0, 30);
+    conv.messages.push({ role: "assistant", content: "", time: Date.now(), model: currentModel });
+    if (conv.title === "新对话" && title) conv.title = title.slice(0, 30);
     conv.updatedAt = Date.now();
 
-    const reqMsgs = conv.messages.slice(0, -1).map(m => ({ role: m.role, content: cleanContentForApi(m.content) }));
+    const allMsgs = conv.messages.slice(0, -1).map(m => ({ role: m.role, content: cleanContentForApi(m.content) }));
+    // 过滤掉失败的对话对（assistant 为空响应的及其前面的 user 消息）
+    const reqMsgs = [];
+    for (let i = 0; i < allMsgs.length; i++) {
+        if (allMsgs[i].role === "assistant" && allMsgs[i].content === "（模型未返回任何内容）") {
+            reqMsgs.pop(); // 移除前面对应的 user 消息
+            continue;
+        }
+        reqMsgs.push(allMsgs[i]);
+    }
     stripFileDataForStorage(conv);
     saveConversations();
 
@@ -683,7 +924,7 @@ async function sendMessage(text, files) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             signal: abortController.signal,
-            body: JSON.stringify({ model: currentModel, messages: reqMsgs, stream: true }),
+            body: JSON.stringify({ model: currentModel, messages: reqMsgs, stream: true, reasoning_effort: currentReasoning }),
         });
         if (!resp.ok) {
             isThinking = false;
@@ -712,7 +953,6 @@ async function sendMessage(text, files) {
                     const finish = chunk.choices?.[0]?.finish_reason;
                     const lastMsg = conv.messages[conv.messages.length-1];
                     if (delta?.reasoning_content) {
-                        isThinking = false;
                         lastMsg._reasoning = (lastMsg._reasoning || "") + delta.reasoning_content;
                         updateLastMessage();
                     }
@@ -761,6 +1001,7 @@ function renderMessages() {
         const cls = msg.role === "user" ? "user" : "assistant";
         const html = formatMsgContent(msg, i, msgs);
         const time = msg.time ? `<div class="o1k-msg-time">${formatTime(msg.time)}</div>` : "";
+        const modelLabel = msg.role === "assistant" && msg.model ? `<div class="o1k-msg-model">${escapeHtml(msg.model)}</div>` : "";
         let actions = "";
         if (msg.role === "user") {
             actions = `<div class="o1k-msg-actions">
@@ -774,7 +1015,7 @@ function renderMessages() {
                 <button data-idx="${i}" data-act="del" class="o1k-act-del" title="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
             </div>`;
         }
-        return `<div class="o1k-msg-wrap ${cls}" data-idx="${i}"><div class="o1k-msg">${html}</div>${time}${actions}</div>`;
+        return `<div class="o1k-msg-wrap ${cls}" data-idx="${i}">${modelLabel}<div class="o1k-msg">${html}</div>${time}${actions}</div>`;
     }).join("");
     box.querySelectorAll(".o1k-msg-actions button").forEach(btn => {
         const idx = +btn.dataset.idx;
@@ -793,19 +1034,21 @@ function formatMsgContent(msg, idx, msgs) {
     const c = msg.content;
     let reasoningHtml = "";
     if (msg.role === "assistant" && msg._reasoning) {
-        const reasoningText = isStreaming && idx === msgs.length - 1
+        const isCurrentStreaming = isStreaming && idx === msgs.length - 1;
+        const reasoningText = isCurrentStreaming
             ? escapeHtml(msg._reasoning).replace(/\n/g, "<br>")
             : renderMd(msg._reasoning);
-        reasoningHtml = `<details class="o1k-reasoning"><summary>思考过程</summary><div class="o1k-reasoning-body">${reasoningText}</div></details>`;
+        const openAttr = isCurrentStreaming ? " open" : "";
+        reasoningHtml = `<details class="o1k-reasoning"${openAttr}><summary>思考过程</summary><div class="o1k-reasoning-body">${reasoningText}</div></details>`;
     }
     if (typeof c === "string") {
         if (msg.role === "assistant" && !isStreaming) return reasoningHtml + renderMd(c);
         if (msg.role === "assistant" && c === "" && idx === msgs.length - 1) {
-            if (isThinking) {
-                return `<div class="o1k-thinking"><div class="o1k-thinking-icon"></div><span class="o1k-thinking-text">思考中...</span></div>`;
-            }
             if (msg._reasoning) {
                 return reasoningHtml;
+            }
+            if (isThinking) {
+                return `<div class="o1k-thinking"><div class="o1k-thinking-icon"></div><span class="o1k-thinking-text">思考中...</span></div>`;
             }
             return `<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>`;
         }
@@ -815,13 +1058,17 @@ function formatMsgContent(msg, idx, msgs) {
     if (Array.isArray(c)) {
         let html = "";
         for (const part of c) {
+            if (part._hidden) continue;
             if (part.type === "text") html += `<p>${escapeHtml(part.text)}</p>`;
             else if (part.type === "image_url") {
                 if (part._video) {
+                    const vName = part._name ? truncateFilename(part._name) : "";
+                    const dur = part._duration ? formatDuration(part._duration) : "";
+                    const durBadge = dur ? `<span class="video-duration">${dur}</span>` : "";
                     if (part._thumb) {
-                        html += `<div class="video-thumb"><img src="${part._thumb}"><div class="play-overlay"></div></div>`;
+                        html += `<div class="video-thumb"><img src="${part._thumb}"><div class="play-overlay"></div>${durBadge}${vName ? `<div class="video-filename" title="${escapeHtml(part._name)}">${escapeHtml(vName)}</div>` : ""}</div>`;
                     } else {
-                        html += `<span class="file-chip"><span class="chip-icon">\u{1F3AC}</span><span class="chip-name">视频</span></span>`;
+                        html += `<div class="video-thumb video-thumb-placeholder"><div class="play-overlay"></div>${durBadge}${vName ? `<div class="video-filename" title="${escapeHtml(part._name)}">${escapeHtml(vName)}</div>` : `<span class="file-chip"><span class="chip-icon">\u{1F3AC}</span><span class="chip-name">视频</span></span>`}</div>`;
                     }
                 } else if (part._stripped) {
                     if (part._thumb) {
@@ -834,10 +1081,11 @@ function formatMsgContent(msg, idx, msgs) {
                 }
             }
             else if (part.type === "video_url") {
+                const vName = part._name ? truncateFilename(part._name) : "";
                 if (part._thumb) {
-                    html += `<div class="video-thumb"><img src="${part._thumb}"><div class="play-overlay"></div></div>`;
+                    html += `<div class="video-thumb"><img src="${part._thumb}"><div class="play-overlay"></div>${vName ? `<div class="video-filename" title="${escapeHtml(part._name)}">${escapeHtml(vName)}</div>` : ""}</div>`;
                 } else {
-                    html += `<span class="file-chip"><span class="chip-icon">\u{1F3AC}</span><span class="chip-name">视频</span></span>`;
+                    html += `<div class="video-thumb video-thumb-placeholder"><div class="play-overlay"></div>${vName ? `<div class="video-filename" title="${escapeHtml(part._name)}">${escapeHtml(vName)}</div>` : `<span class="file-chip"><span class="chip-icon">\u{1F3AC}</span><span class="chip-name">视频</span></span>`}</div>`;
                 }
             }
             else if (part.type === "input_audio") {
@@ -858,17 +1106,29 @@ function formatMsgContent(msg, idx, msgs) {
 function updateLastMessage() {
     const box = chatContainer.querySelector("#o1key-chat-messages");
     const msgs = getMessages();
+    const msg = msgs[msgs.length - 1];
     const last = box.querySelector(`.o1k-msg-wrap[data-idx="${msgs.length - 1}"] .o1k-msg`);
-    if (last) last.innerHTML = escapeHtml(msgs[msgs.length - 1].content).replace(/\n/g, "<br>");
+    if (!last) return;
+    // 增量更新 reasoning body，避免整体重渲染导致抖动
+    if (msg._reasoning && msg.content === "") {
+        const body = last.querySelector(".o1k-reasoning-body");
+        if (body) {
+            body.innerHTML = escapeHtml(msg._reasoning).replace(/\n/g, "<br>");
+            scrollToBottom();
+            return;
+        }
+    }
+    last.innerHTML = formatMsgContent(msg, msgs.length - 1, msgs);
     scrollToBottom();
 }
 
 function renderLastAsMarkdown() {
     const box = chatContainer.querySelector("#o1key-chat-messages");
     const msgs = getMessages();
+    const msg = msgs[msgs.length - 1];
     const last = box.querySelector(`.o1k-msg-wrap[data-idx="${msgs.length - 1}"] .o1k-msg`);
-    if (last && msgs[msgs.length - 1]?.role === "assistant") {
-        last.innerHTML = renderMd(msgs[msgs.length - 1].content);
+    if (last && msg?.role === "assistant") {
+        last.innerHTML = formatMsgContent(msg, msgs.length - 1, msgs);
     }
 }
 
