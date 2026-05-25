@@ -432,6 +432,113 @@ try:
         }
         return web.json_response(job_detail)
 
+    @PromptServer.instance.routes.post("/o1key/delete_history")
+    async def delete_history_item(request):
+        """删除持久化历史记录及对应的输出文件"""
+        import os, uuid, json as _json
+        body = await request.json()
+        job_ids = body.get("delete", [])
+        if not job_ids:
+            return web.json_response({"success": False, "error": "missing ids"}, status=400)
+        output_dir = os.path.abspath(folder_paths.get_output_directory())
+        meta_file = os.path.join(output_dir, ".o1key_history.json")
+        meta = {}
+        if os.path.isfile(meta_file):
+            try:
+                with open(meta_file, "r", encoding="utf-8") as mf:
+                    meta = _json.load(mf)
+            except Exception:
+                pass
+        deleted_files = []
+        for job_id in job_ids:
+            files_to_remove = []
+            for fname, m in list(meta.items()):
+                if m.get("workflow_id") == job_id:
+                    files_to_remove.append(fname)
+                elif str(uuid.uuid5(uuid.NAMESPACE_URL, fname)) == job_id:
+                    files_to_remove.append(fname)
+            for fname in files_to_remove:
+                meta.pop(fname, None)
+                fpath = os.path.join(output_dir, fname)
+                if os.path.isfile(fpath):
+                    try:
+                        os.remove(fpath)
+                        deleted_files.append(fname)
+                    except Exception:
+                        pass
+        try:
+            with open(meta_file, "w", encoding="utf-8") as mf:
+                _json.dump(meta, mf, ensure_ascii=False)
+        except Exception:
+            pass
+        return web.json_response({"success": True, "deleted": deleted_files})
+
+    # === AI 聊天代理（流式 SSE 透传） ===
+    @PromptServer.instance.routes.post("/o1key/restart")
+    async def restart_server(request):
+        import sys, os as _ros, subprocess, threading
+        def _do_restart():
+            import time
+            time.sleep(1.5)
+            skip = {"--auto-launch", "--auto_launch", "--launch", "--windows-standalone-build"}
+            args = [a for a in sys.argv if a not in skip]
+            args.append("--disable-auto-launch")
+            subprocess.Popen([sys.executable] + args, cwd=_ros.getcwd())
+            _ros._exit(0)
+        threading.Thread(target=_do_restart, daemon=True).start()
+        return web.json_response({"success": True, "message": "正在重启..."})
+
+    # === AI 聊天代理（流式 SSE 透传） ===
+    @PromptServer.instance.routes.post("/o1key/chat/completions")
+    async def chat_completions_proxy(request):
+        import aiohttp as _aiohttp
+        import json as _cjson
+
+        data = await request.json()
+        config = load_config()
+        api_key = config.get("O1KEY_API_KEY", "")
+        if not api_key:
+            return web.json_response({"error": "未配置 API Key"}, status=401)
+
+        route = data.get("route", "全球加速")
+        base_url = NETWORK_ROUTES.get(route, "https://cf-api.o1key.com")
+        model = data.get("model", "gpt-5.5")
+        messages = data.get("messages", [])
+
+        url = f"{base_url}/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        body = {"model": model, "messages": messages, "stream": True}
+
+        resp = web.StreamResponse(
+            status=200, reason="OK",
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            }
+        )
+        await resp.prepare(request)
+
+        try:
+            timeout = _aiohttp.ClientTimeout(total=120)
+            async with _aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=body) as upstream:
+                    if upstream.status != 200:
+                        err = await upstream.text()
+                        await resp.write(f"data: {_cjson.dumps({'error': err})}\n\n".encode())
+                        await resp.write(b"data: [DONE]\n\n")
+                        return resp
+                    async for chunk in upstream.content.iter_any():
+                        await resp.write(chunk)
+        except Exception as e:
+            await resp.write(f"data: {_cjson.dumps({'error': str(e)})}\n\n".encode())
+            await resp.write(b"data: [DONE]\n\n")
+
+        return resp
+
     # === 执行事件 Hook：持久化耗时元数据 ===
     import time as _time, json as _json2, os as _os
     _execution_tracker = {}

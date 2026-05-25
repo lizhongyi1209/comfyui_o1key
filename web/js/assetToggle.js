@@ -72,6 +72,22 @@ app.registerExtension({
             }
         };
 
+        // --- Patch deleteItem: 同时删除 o1key 持久化记录和文件 ---
+        const _origDeleteItem = api.deleteItem.bind(api);
+        api.deleteItem = async function (type, id) {
+            const result = await _origDeleteItem(type, id);
+            if (type === "history" && enabled()) {
+                try {
+                    await fetch("/o1key/delete_history", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ delete: [id] }),
+                    });
+                } catch (e) {}
+            }
+            return result;
+        };
+
         // --- Patch getJobDetail: 真实 API 失败时回退到本地路由 ---
         const _origGetJobDetail = api.getJobDetail.bind(api);
         api.getJobDetail = async function (jobId) {
