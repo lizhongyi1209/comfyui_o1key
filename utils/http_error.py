@@ -29,6 +29,7 @@ HTTP_ERROR_MESSAGES = {
 # 错误内容关键词 → 用户友好文案（优先于状态码匹配）
 ERROR_CONTENT_MESSAGES = {
     "The current model has a high load": "模型过载，请稍后重试！",
+    "system error": "系统错误，请稍后重试。",
 }
 
 # 可退避重试的状态码

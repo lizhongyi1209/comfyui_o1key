@@ -28,5 +28,8 @@ from .K3_video import K3Video
 from .K3_video_firstlast import K3VideoFirstLast
 from .K3_motion_control import K3MotionControl, K3MotionVideoCheck
 from .save_image_format import SaveImageFormat
+from .save_psd import O1keySavePSD
+from .remove_bg import O1keyRemoveBackground
+from .color_remove_bg import O1keyColorRemoveBG
 
-__all__ = ['NanoBananaV2', 'NanoBananaV2Batch', 'NanoBanana', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'O1keyGrokImage', 'KVideoFirstLast', 'KVideoImage2Video', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator', 'SaveImageFormat']
+__all__ = ['NanoBananaV2', 'NanoBananaV2Batch', 'NanoBanana', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'O1keyGrokImage', 'KVideoFirstLast', 'KVideoImage2Video', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator', 'SaveImageFormat', 'O1keySavePSD', 'O1keyRemoveBackground', 'O1keyColorRemoveBG']

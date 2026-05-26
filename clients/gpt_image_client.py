@@ -173,7 +173,20 @@ class GptImageClient:
             arr = np.array(img.convert("RGBA")).astype(np.float32) / 255.0
             tensors.append(torch.from_numpy(arr))
 
-        return torch.stack(tensors, dim=0)          # [B, H, W, 4]
+        # 批量模式下 API 可能返回不同尺寸，统一 resize 到最大尺寸
+        max_h = max(t.shape[0] for t in tensors)
+        max_w = max(t.shape[1] for t in tensors)
+        aligned = []
+        for t in tensors:
+            if t.shape[0] != max_h or t.shape[1] != max_w:
+                t = t.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
+                t = torch.nn.functional.interpolate(
+                    t, size=(max_h, max_w), mode="bilinear", align_corners=False
+                )
+                t = t.squeeze(0).permute(1, 2, 0)  # [H, W, C]
+            aligned.append(t)
+
+        return torch.stack(aligned, dim=0)          # [B, H, W, 4]
 
     # ── 响应解析（通用） ─────────────────────────────────────────────────────
 

@@ -182,6 +182,22 @@ const CSS = `
 .o1k-conv-item:hover .conv-rename,.o1k-conv-item:hover .conv-del{opacity:1}
 .o1k-conv-item .conv-rename:hover{background:rgba(126,184,247,.2);color:#7eb8f7}
 .o1k-conv-item .conv-del:hover{background:rgba(220,60,60,.6);color:#fff}
+.o1k-conv-item .conv-rename-input{flex:1;min-width:0;padding:2px 6px;border:1px solid rgba(126,184,247,.5);border-radius:4px;background:rgba(0,0,0,.3);color:#ddd;font-size:12px;outline:none}
+.o1k-conv-item .conv-rename-input:focus{border-color:#7eb8f7}
+.o1k-conv-confirm{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
+.o1k-conv-confirm span{font-size:11px;color:#ccc;white-space:nowrap}
+.o1k-conv-confirm button{padding:2px 8px;border:none;border-radius:4px;font-size:11px;cursor:pointer;transition:all .12s}
+.o1k-conv-confirm .confirm-yes{background:rgba(220,60,60,.7);color:#fff}
+.o1k-conv-confirm .confirm-yes:hover{background:rgba(220,60,60,.9)}
+.o1k-conv-confirm .confirm-no{background:rgba(255,255,255,.1);color:#aaa}
+.o1k-conv-confirm .confirm-no:hover{background:rgba(255,255,255,.15);color:#ddd}
+.o1k-msg-del-confirm{display:flex;align-items:center;gap:6px;padding:4px 8px;margin-top:4px;border-radius:6px;background:rgba(220,60,60,.08);border:1px solid rgba(220,60,60,.2)}
+.o1k-msg-del-confirm span{font-size:11px;color:#ccc}
+.o1k-msg-del-confirm button{padding:2px 8px;border:none;border-radius:4px;font-size:11px;cursor:pointer;transition:all .12s}
+.o1k-msg-del-confirm .confirm-yes{background:rgba(220,60,60,.7);color:#fff}
+.o1k-msg-del-confirm .confirm-yes:hover{background:rgba(220,60,60,.9)}
+.o1k-msg-del-confirm .confirm-no{background:rgba(255,255,255,.1);color:#aaa}
+.o1k-msg-del-confirm .confirm-no:hover{background:rgba(255,255,255,.15);color:#ddd}
 #o1key-chat-input-area{flex-shrink:0;padding:10px 14px 14px;background:transparent}
 #o1key-chat-previews{display:flex;gap:6px;padding:0 0 8px;flex-wrap:wrap}
 #o1key-chat-previews .preview-thumb{position:relative;width:40px;height:40px;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,.1)}
@@ -394,35 +410,71 @@ function renderHistory() {
             const id = btn.dataset.id;
             const conv = conversations.find(c => c.id === id);
             if (!conv) return;
-            const newTitle = prompt("重命名对话", conv.title || "");
-            if (newTitle === null || !newTitle.trim()) return;
-            conv.title = newTitle.trim();
-            conv.updatedAt = Date.now();
-            saveConversations();
-            renderHistory();
+            const item = btn.closest(".o1k-conv-item");
+            const infoEl = item.querySelector(".conv-info");
+            const oldHtml = infoEl.innerHTML;
+            infoEl.innerHTML = `<input class="conv-rename-input" value="${escapeHtml(conv.title || "")}" />`;
+            const input = infoEl.querySelector(".conv-rename-input");
+            input.focus();
+            input.select();
+            const commit = () => {
+                const val = input.value.trim();
+                if (val && val !== conv.title) {
+                    conv.title = val;
+                    conv.updatedAt = Date.now();
+                    saveConversations();
+                }
+                renderHistory();
+            };
+            input.addEventListener("keydown", (ev) => {
+                if (ev.key === "Enter") { ev.preventDefault(); commit(); }
+                if (ev.key === "Escape") { ev.preventDefault(); renderHistory(); }
+            });
+            input.addEventListener("blur", commit);
         });
     });
     box.querySelectorAll(".conv-del").forEach(btn => {
         btn.addEventListener("click", (e) => {
             e.stopPropagation();
-            if (!confirm("确定删除这个对话？")) return;
             const id = btn.dataset.id;
-            conversations = conversations.filter(c => c.id !== id);
-            if (activeConvId === id) activeConvId = conversations[0]?.id || null;
-            saveConversations();
-            renderHistory();
+            const item = btn.closest(".o1k-conv-item");
+            const infoEl = item.querySelector(".conv-info");
+            infoEl.innerHTML = `<div class="o1k-conv-confirm"><span>确定删除？</span><button class="confirm-yes">删除</button><button class="confirm-no">取消</button></div>`;
+            item.querySelector(".conv-rename").style.display = "none";
+            btn.style.display = "none";
+            infoEl.querySelector(".confirm-yes").addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                conversations = conversations.filter(c => c.id !== id);
+                if (activeConvId === id) activeConvId = conversations[0]?.id || null;
+                saveConversations();
+                renderHistory();
+            });
+            infoEl.querySelector(".confirm-no").addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                renderHistory();
+            });
         });
     });
 }
 
 function deleteMessage(idx) {
-    if (!confirm("确定删除这条消息？")) return;
-    const conv = getActiveConv();
-    if (!conv) return;
-    conv.messages.splice(idx, 1);
-    conv.updatedAt = Date.now();
-    saveConversations();
-    renderMessages();
+    const wrap = chatContainer.querySelector(`.o1k-msg-wrap[data-idx="${idx}"]`);
+    if (!wrap || wrap.querySelector(".o1k-msg-del-confirm")) return;
+    const confirmEl = document.createElement("div");
+    confirmEl.className = "o1k-msg-del-confirm";
+    confirmEl.innerHTML = `<span>确定删除？</span><button class="confirm-yes">删除</button><button class="confirm-no">取消</button>`;
+    wrap.appendChild(confirmEl);
+    confirmEl.querySelector(".confirm-yes").addEventListener("click", () => {
+        const conv = getActiveConv();
+        if (!conv) return;
+        conv.messages.splice(idx, 1);
+        conv.updatedAt = Date.now();
+        saveConversations();
+        renderMessages();
+    });
+    confirmEl.querySelector(".confirm-no").addEventListener("click", () => {
+        confirmEl.remove();
+    });
 }
 
 function copyMessage(idx) {

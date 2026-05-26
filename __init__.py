@@ -22,6 +22,9 @@ logging.getLogger().addFilter(_seeder_filter)
 
 from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, O1keyGrokImage, KVideoFirstLast, KVideoImage2Video
 from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck, NanoBananaV2, NanoBananaV2Batch, SaveImageFormat
+from .nodes import O1keySavePSD
+from .nodes import O1keyRemoveBackground
+from .nodes import O1keyColorRemoveBG
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -92,6 +95,9 @@ NODE_CLASS_MAPPINGS = {
     "NanoBananaV2": NanoBananaV2,
     "NanoBananaV2Batch": NanoBananaV2Batch,
     "SaveImageFormat": SaveImageFormat,
+    "O1keySavePSD": O1keySavePSD,
+    "O1keyRemoveBackground": O1keyRemoveBackground,
+    "O1keyColorRemoveBG": O1keyColorRemoveBG,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -127,6 +133,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "NanoBananaV2": "Nano Banana V2",
     "NanoBananaV2Batch": "Nano Banana V2（批量）",
     "SaveImageFormat": "保存图像（格式转换）",
+    "O1keySavePSD": "保存 PSD（分层）",
+    "O1keyRemoveBackground": "去背景（rembg）",
+    "O1keyColorRemoveBG": "颜色去背景",
 }
 
 WEB_DIRECTORY = "./web"
@@ -181,7 +190,7 @@ try:
         test_key = data.get("api_key", "").strip()
         if not test_key:
             return web.json_response({"valid": False, "error": "密钥不能为空"})
-        base_url = NETWORK_ROUTES.get("全球加速", "https://api.o1key.cn")
+        base_url = NETWORK_ROUTES.get("CF加速", "https://cf-api.o1key.com")
         url = f"{base_url}/v1/models"
         headers = {"Authorization": f"Bearer {test_key}"}
         try:
@@ -500,7 +509,7 @@ try:
         if not api_key:
             return web.json_response({"error": "未配置 API Key"}, status=401)
 
-        route = data.get("route", "全球加速")
+        route = data.get("route", "CF加速")
         base_url = NETWORK_ROUTES.get(route, "https://cf-api.o1key.com")
         model = data.get("model", "gpt-5.5")
         messages = data.get("messages", [])
