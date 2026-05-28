@@ -6,9 +6,8 @@ GPT Image API 客户端
 
 设计原则：
   - 与 doubao_image_client.py 保持相同的异步 + 同步双入口模式
-  - 图像以 multipart/form-data 方式上传（edits 接口）
-  - generations 接口使用 JSON 请求体，图像以 data URI base64 内联传递
-  - 响应支持 url 和 b64_json 两种格式，优先处理 b64_json（避免二次下载）
+  - generations / edits 接口均使用 multipart/form-data
+  - 响应兼容 SSE 流式、JSON、url 和 b64_json
 """
 
 import asyncio
@@ -28,11 +27,6 @@ from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..utils.image_utils import tensor_to_pil, encode_image_to_base64
 from ..utils.http_error import RETRYABLE_STATUS_CODES, HTTP_ERROR_MESSAGES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR, get_friendly_message
 
-# GPT Image 专属错误文案
-_GPT_ERROR_MESSAGES = {
-    500: "触发内容风控，或服务器繁忙！",
-}
-
 try:
     from comfy.model_management import processing_interrupted, InterruptProcessingException
     _INTERRUPT_AVAILABLE = True
@@ -43,7 +37,7 @@ except ImportError:
 
 # ── 接口端点 ──────────────────────────────────────────────────────────────────
 _ENDPOINT_GENERATIONS = "/v1/images/generations/"
-_ENDPOINT_EDITS       = "/v1/images/edits/"
+_ENDPOINT_EDITS       = "/v1/images/edits"
 
 # ── 模型名映射（UI 显示名 → API 实际参数名）─────────────────────────────────
 _MODEL_NAME_MAP = {
@@ -60,11 +54,10 @@ class GptImageClient:
     GPT Image API 客户端
 
     接口说明：
-      generations：JSON body，支持 quality / size / n / model
-      edits：multipart/form-data，必须包含 image（PNG），可选 mask（PNG）
+      generations：multipart/form-data，支持 quality / size / n / model
+      edits：multipart/form-data，图片和 mask 使用 PNG 文件上传
 
-    两个接口的响应格式相同：
-      { "data": [ {"url": "..."} | {"b64_json": "..."} ] }
+    响应支持 JSON 和 SSE 流式格式。
     """
 
     def __init__(self):
@@ -81,6 +74,26 @@ class GptImageClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    @staticmethod
+    def _new_multipart_form() -> aiohttp.FormData:
+        try:
+            return aiohttp.FormData(default_to_multipart=True)
+        except TypeError:
+            form = aiohttp.FormData()
+            form._is_multipart = True
+            return form
+
+    @staticmethod
+    def _add_form_fields(form: aiohttp.FormData, fields: dict) -> None:
+        for key, value in fields.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            elif isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            form.add_field(key, str(value))
 
     # ── 图像转换工具 ──────────────────────────────────────────────────────────
 
@@ -208,6 +221,10 @@ class GptImageClient:
             raise RuntimeError(f"API 返回错误: {msg}")
 
         data_list = resp_json.get("data")
+        if data_list is None:
+            data_list = resp_json.get("images")
+        if data_list is None and (resp_json.get("b64_json") or resp_json.get("url")):
+            data_list = [resp_json]
         if not data_list:
             raise RuntimeError(
                 f"API 响应中未找到 data 字段，完整响应：\n"
@@ -246,6 +263,203 @@ class GptImageClient:
                 print(f"[o1key GPT Image] 警告：第 {idx + 1} 条数据既无 b64_json 也无 url，已跳过")
 
         return images
+
+    @staticmethod
+    def _decode_b64_image(b64: str, label: str) -> Image.Image:
+        try:
+            img_bytes = base64.b64decode(b64)
+            img = Image.open(BytesIO(img_bytes))
+            print(f"[o1key GPT Image] {label} base64 解码完成 ({img.size[0]}×{img.size[1]})")
+            return img
+        except Exception as e:
+            raise RuntimeError(f"{label} base64 解码失败: {e}") from None
+
+    async def _append_images_from_payload(
+        self,
+        payload: dict,
+        session: aiohttp.ClientSession,
+        images: List[Image.Image],
+        event_name: str = "",
+    ) -> bool:
+        if isinstance(payload, dict) and "error" in payload:
+            err = payload["error"]
+            msg = (
+                err.get("message") or err.get("msg") or json.dumps(err, ensure_ascii=False)
+                if isinstance(err, dict)
+                else str(err)
+            )
+            raise RuntimeError(get_friendly_message(500, msg)) from None
+
+        if not isinstance(payload, dict):
+            return False
+
+        event_type = payload.get("type") or event_name
+        if "partial_image" in event_type:
+            return False
+
+        for key in ("data", "images"):
+            data_list = payload.get(key)
+            if isinstance(data_list, list):
+                parsed = await self._parse_response({"data": data_list}, session)
+                images.extend(parsed)
+                return True
+
+        if payload.get("b64_json") or payload.get("url"):
+            parsed = await self._parse_response({"data": [payload]}, session)
+            images.extend(parsed)
+            return True
+
+        image_obj = payload.get("image")
+        if isinstance(image_obj, dict) and (image_obj.get("b64_json") or image_obj.get("url")):
+            parsed = await self._parse_response({"data": [image_obj]}, session)
+            images.extend(parsed)
+            return True
+
+        return False
+
+    async def _parse_edit_stream_response(
+        self,
+        resp: aiohttp.ClientResponse,
+        session: aiohttp.ClientSession,
+    ) -> List[Image.Image]:
+        """
+        Parse /v1/images/edits SSE events and return final completed images.
+        Partial images are intentionally ignored so the node output stays unchanged.
+        """
+        images: List[Image.Image] = []
+        buffer = ""
+        event_name = ""
+        data_lines = []
+        partial_count = 0
+        debug_body_parts = []
+
+        async def _handle_event():
+            nonlocal event_name, data_lines, partial_count, images
+            if not data_lines:
+                event_name = ""
+                return
+
+            data_str = "\n".join(data_lines).strip()
+            event_name = event_name.strip()
+            data_lines = []
+
+            if not data_str or data_str == "[DONE]":
+                return
+
+            try:
+                payload = json.loads(data_str)
+            except Exception:
+                raise RuntimeError(get_friendly_message(500, data_str)) from None
+
+            if isinstance(payload, dict):
+                event_type = payload.get("type") or event_name
+            else:
+                event_type = event_name
+            if "partial_image" in event_type:
+                partial_count += 1
+                return
+
+            await self._append_images_from_payload(payload, session, images, event_name)
+
+        async for raw_chunk in resp.content.iter_any():
+            chunk_text = raw_chunk.decode("utf-8", errors="ignore")
+            debug_body_parts.append(chunk_text)
+            buffer += chunk_text
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.rstrip("\r")
+                if line == "":
+                    await _handle_event()
+                    event_name = ""
+                    continue
+                if line.startswith(":"):
+                    continue
+                if line.startswith("event:"):
+                    event_name = line[len("event:"):].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[len("data:"):].lstrip())
+
+        if buffer.strip():
+            data_lines.append(buffer.strip())
+        await _handle_event()
+
+        if partial_count:
+            print(f"[o1key GPT Image] 流式中间图 {partial_count} 张（已忽略，仅输出最终图）")
+        if not images:
+            raise RuntimeError("流式响应结束，但未收到最终图片")
+
+        return images
+
+    async def _parse_stream_text_response(
+        self,
+        text: str,
+        session: aiohttp.ClientSession,
+    ) -> List[Image.Image]:
+        images: List[Image.Image] = []
+        partial_count = 0
+        event_name = ""
+        data_lines = []
+
+        async def _handle_event():
+            nonlocal event_name, data_lines, partial_count, images
+            if not data_lines:
+                event_name = ""
+                return
+            data_str = "\n".join(data_lines).strip()
+            event_name = event_name.strip()
+            data_lines = []
+            if not data_str or data_str == "[DONE]":
+                return
+            payload = json.loads(data_str)
+            if isinstance(payload, dict):
+                event_type = payload.get("type") or event_name
+            else:
+                event_type = event_name
+            if "partial_image" in event_type:
+                partial_count += 1
+                return
+            await self._append_images_from_payload(payload, session, images, event_name)
+
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip("\r")
+            if line == "":
+                await _handle_event()
+                event_name = ""
+                continue
+            if line.startswith(":"):
+                continue
+            if line.startswith("event:"):
+                event_name = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[len("data:"):].lstrip())
+        await _handle_event()
+
+        if partial_count:
+            print(f"[o1key GPT Image] 流式中间图 {partial_count} 张（已忽略，仅输出最终图）")
+        if not images:
+            raise RuntimeError("流式响应结束，但未收到最终图片")
+        return images
+
+    async def _parse_success_response(
+        self,
+        resp: aiohttp.ClientResponse,
+        session: aiohttp.ClientSession,
+        label: str = "",
+    ) -> List[Image.Image]:
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if "event-stream" in content_type:
+            return await self._parse_edit_stream_response(resp, session)
+
+        text = await resp.text()
+        stripped = text.lstrip()
+        if stripped.startswith("data:") or stripped.startswith("event:"):
+            return await self._parse_stream_text_response(text, session)
+
+        try:
+            resp_json = json.loads(text)
+        except Exception:
+            raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
+        return await self._parse_response(resp_json, session)
 
     # ── 中断轮询 ──────────────────────────────────────────────────────────────
 
@@ -311,13 +525,15 @@ class GptImageClient:
             "quality":    quality,
             "n":          n,
             "moderation": "low",
+            "partial_images": 0,
         }
 
         body["size"] = size if size else "auto"
 
-        # 图生图：将 tensor 列表转成 data URI 内联
+        image_files = []
+
+        # 图生图：multipart 方式上传参考图
         if image_list is not None:
-            data_urls = []
             for idx_img, img_tensor in enumerate(image_list):
                 pil_images = tensor_to_pil(img_tensor)
                 img = pil_images[0]
@@ -333,10 +549,8 @@ class GptImageClient:
                 png_budget = int(per_image_budget * 3 / 4)
                 label = f"第{idx_img + 1}张" if len(image_list) > 1 else ""
                 png_bytes = self._shrink_png_to_limit(png_bytes, png_budget, label)
-                b64 = base64.b64encode(png_bytes).decode("utf-8")
-                data_urls.append(f"data:image/png;base64,{b64}")
-            body["image"] = data_urls[0] if len(data_urls) == 1 else data_urls
-            mode = f"图生图（参考图 {len(data_urls)} 张）"
+                image_files.append(png_bytes)
+            mode = f"图生图（参考图 {len(image_files)} 张）"
         else:
             mode = "文生图"
 
@@ -347,25 +561,40 @@ class GptImageClient:
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         timeout   = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
 
+        def _build_multipart_form() -> aiohttp.FormData:
+            form = self._new_multipart_form()
+            self._add_form_fields(form, body)
+            image_field = "image[]" if len(image_files) > 1 else "image"
+            for idx_img, png_bytes in enumerate(image_files):
+                form.add_field(
+                    image_field,
+                    png_bytes,
+                    filename=f"image_{idx_img + 1}.png",
+                    content_type="image/png",
+                )
+            return form
+
         async def _do_request():
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 last_status = None
                 for attempt in range(DEFAULT_MAX_RETRIES + 1):
                     t0 = time.time()
-                    async with session.post(url, json=body, headers=self._json_headers()) as resp:
+                    async with session.post(
+                        url,
+                        data=_build_multipart_form(),
+                        headers=self._auth_headers(),
+                    ) as resp:
                         elapsed = time.time() - t0
-                        text = await resp.text()
 
                         if resp.status != 200:
                             last_status = resp.status
+                            text = await resp.text()
                             if resp.status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
-                                friendly = HTTP_ERROR_MESSAGES.get(resp.status)
+                                friendly = get_friendly_message(resp.status)
                                 delay = _compute_delay(attempt, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR)
                                 print(f"[o1key GPT Image] {friendly} {delay:.1f}s 后重试 ({attempt+1}/{DEFAULT_MAX_RETRIES})...")
                                 await asyncio.sleep(delay)
                                 continue
-                            if resp.status in _GPT_ERROR_MESSAGES:
-                                raise RuntimeError(_GPT_ERROR_MESSAGES[resp.status])
                             if resp.status in HTTP_ERROR_MESSAGES:
                                 raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
                             try:
@@ -380,13 +609,8 @@ class GptImageClient:
                                 msg = text
                             raise RuntimeError(get_friendly_message(resp.status, msg))
 
-                        try:
-                            resp_json = json.loads(text)
-                        except Exception:
-                            raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
-
-                    print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
-                    return await self._parse_response(resp_json, session)
+                        print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
+                        return await self._parse_success_response(resp, session, "GENERATIONS")
 
                 if last_status and last_status in HTTP_ERROR_MESSAGES:
                     raise RuntimeError(HTTP_ERROR_MESSAGES[last_status])
@@ -394,7 +618,7 @@ class GptImageClient:
 
         return await self._run_with_interrupt(_do_request())
 
-    # ── 图像编辑（edits 接口，multipart/form-data）──────────────────────────
+    # ── 图像编辑（edits 接口，multipart/form-data）──────────────────────
 
     async def _edit_async(
         self,
@@ -408,7 +632,7 @@ class GptImageClient:
         mask_tensor: Optional[torch.Tensor] = None,
     ) -> List[Image.Image]:
         """
-        调用 /v1/images/edits/ 接口（multipart/form-data）。
+        调用 /v1/images/edits 接口（multipart/form-data）。
         """
         # 模型名映射：UI 显示名 → API 参数名
         api_model = _MODEL_NAME_MAP.get(model, model)
@@ -421,15 +645,9 @@ class GptImageClient:
             normalized_tensors.append(t)
         num_images = len(normalized_tensors)
 
-        form = aiohttp.FormData()
-        form.add_field("model",      api_model)
-        form.add_field("prompt",     prompt)
-        form.add_field("n",          str(n))
-        form.add_field("quality",    quality)
+        image_files = []
 
-        form.add_field("size", size if size else "auto")
-
-        # 多图：用 image[] 数组字段逐张附加，支持 gpt-image-1.5 最多 16 张
+        # 多图：用 multipart image/image[] 字段逐张上传
         # 预算：20MB 按图数平摊，蒙版预留 1MB
         mask_reserve = 1024 * 1024 if mask_tensor is not None else 0
         per_image_budget = max(
@@ -440,28 +658,50 @@ class GptImageClient:
             img_bytes = self._tensor_to_png_bytes(frame)
             label = f"第{i + 1}张" if num_images > 1 else ""
             img_bytes = self._shrink_png_to_limit(img_bytes, per_image_budget, label)
-            form.add_field(
-                "image[]",
-                img_bytes,
-                filename=f"image_{i}.png",
-                content_type="image/png",
-            )
+            image_files.append(img_bytes)
 
         # 蒙版尺寸校验以第一张图为基准
         first_tensor = normalized_tensors[0]
         ih, iw = first_tensor.shape[1], first_tensor.shape[2]
 
+        mask_png = None
         if mask_tensor is not None:
             mask_png = self._mask_tensor_to_rgba_png_bytes(mask_tensor, (ih, iw))
-            form.add_field(
-                "mask",
-                mask_png,
-                filename="mask.png",
-                content_type="image/png",
-            )
             mode = "图像编辑（带蒙版）"
         else:
             mode = "图像编辑（无蒙版）"
+
+        form_fields = {
+            "model": api_model,
+            "prompt": prompt,
+            "partial_images": 0,
+            "n": n,
+            "quality": quality,
+            "size": size if size else "auto",
+            "output_format": "png",
+            "background": "opaque",
+            "moderation": "low",
+        }
+
+        def _build_multipart_form() -> aiohttp.FormData:
+            form = self._new_multipart_form()
+            self._add_form_fields(form, form_fields)
+
+            for idx_img, img_bytes in enumerate(image_files):
+                form.add_field(
+                    "image[]",
+                    img_bytes,
+                    filename=f"image_{idx_img + 1}.png",
+                    content_type="image/png",
+                )
+            if mask_png is not None:
+                form.add_field(
+                    "mask",
+                    mask_png,
+                    filename="mask.png",
+                    content_type="image/png",
+                )
+            return form
 
         url = f"{self.base_url}{_ENDPOINT_EDITS}"
         print(f"[o1key GPT Image] {mode} | 模型={model} | 参考图={num_images}张 | "
@@ -472,39 +712,45 @@ class GptImageClient:
 
         async def _do_request():
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                t0 = time.time()
-                async with session.post(
-                    url,
-                    data=form,
-                    headers=self._auth_headers(),
-                ) as resp:
-                    elapsed = time.time() - t0
-                    text = await resp.text()
+                last_status = None
+                for attempt in range(DEFAULT_MAX_RETRIES + 1):
+                    t0 = time.time()
+                    async with session.post(
+                        url,
+                        data=_build_multipart_form(),
+                        headers=self._auth_headers(),
+                    ) as resp:
+                        elapsed = time.time() - t0
 
-                    if resp.status != 200:
-                        if resp.status in _GPT_ERROR_MESSAGES:
-                            raise RuntimeError(_GPT_ERROR_MESSAGES[resp.status])
-                        if resp.status in HTTP_ERROR_MESSAGES:
-                            raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
-                        try:
-                            err_json = json.loads(text)
-                            err_obj  = err_json.get("error", {})
-                            msg = (
-                                err_obj.get("message") or err_obj.get("msg") or text
-                                if isinstance(err_obj, dict)
-                                else str(err_obj) or text
-                            )
-                        except Exception:
-                            msg = text
-                        raise RuntimeError(get_friendly_message(resp.status, msg))
+                        if resp.status != 200:
+                            text = await resp.text()
+                            last_status = resp.status
+                            if resp.status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
+                                friendly = get_friendly_message(resp.status)
+                                delay = _compute_delay(attempt, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR)
+                                print(f"[o1key GPT Image] {friendly} retrying in {delay:.1f}s ({attempt+1}/{DEFAULT_MAX_RETRIES})...")
+                                await asyncio.sleep(delay)
+                                continue
+                            if resp.status in HTTP_ERROR_MESSAGES:
+                                raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
+                            try:
+                                err_json = json.loads(text)
+                                err_obj  = err_json.get("error", {})
+                                msg = (
+                                    err_obj.get("message") or err_obj.get("msg") or text
+                                    if isinstance(err_obj, dict)
+                                    else str(err_obj) or text
+                                )
+                            except Exception:
+                                msg = text
+                            raise RuntimeError(get_friendly_message(resp.status, msg))
 
-                    try:
-                        resp_json = json.loads(text)
-                    except Exception:
-                        raise RuntimeError(f"响应 JSON 解析失败，原始内容：{text[:500]}")
+                        print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
+                        return await self._parse_success_response(resp, session, "EDITS")
 
-                print(f"[o1key GPT Image] API 响应耗时 {elapsed:.1f}s")
-                return await self._parse_response(resp_json, session)
+                if last_status and last_status in HTTP_ERROR_MESSAGES:
+                    raise RuntimeError(HTTP_ERROR_MESSAGES[last_status])
+                raise RuntimeError(f"Request failed after {DEFAULT_MAX_RETRIES} retries")
 
         return await self._run_with_interrupt(_do_request())
 
@@ -525,7 +771,7 @@ class GptImageClient:
         同步入口，在独立线程中运行事件循环，避免与 ComfyUI 主循环冲突。
 
         路由逻辑：
-          - 无 image_tensor  → generations 接口（文生图，JSON body）
+          - 无 image_tensor  → generations 接口（文生图，multipart/form-data）
           - 有 image_tensor  → edits 接口（图生图/编辑，multipart/form-data）
         """
         use_edits = (image_tensor is not None)

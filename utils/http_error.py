@@ -28,12 +28,15 @@ HTTP_ERROR_MESSAGES = {
 
 # 错误内容关键词 → 用户友好文案（优先于状态码匹配）
 ERROR_CONTENT_MESSAGES = {
+    "Your request was rejected by the safety system": "请求被安全系统拦截：请调整提示词，避免敏感、违规、血腥、色情、仇恨、未成年人或真实人物等高风险内容。",
+    "safety system": "请求被安全系统拦截：请调整提示词，避免敏感、违规、血腥、色情、仇恨、未成年人或真实人物等高风险内容。",
+    "unexpected end of JSON input": "通常重试能解决；反复出现就降低分辨率、数量或换网络线路。",
     "The current model has a high load": "模型过载，请稍后重试！",
     "system error": "系统错误，请稍后重试。",
 }
 
 # 可退避重试的状态码
-RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+RETRYABLE_STATUS_CODES = {429, 502, 503, 504, 524}
 
 # 退避重试默认参数
 DEFAULT_MAX_RETRIES = 3
@@ -44,10 +47,15 @@ DEFAULT_BACKOFF_FACTOR = 2.0  # 指数退避因子
 
 def get_friendly_message(status_code: int, raw_message: str = "") -> str:
     """根据状态码/错误内容返回友好文案，未匹配则返回原始信息"""
+    if status_code == 524:
+        return "Gateway timed out while waiting for upstream image generation. Please retry, lower resolution/count, or switch network route."
     if raw_message:
+        raw_message_lower = raw_message.lower()
         for keyword, friendly_msg in ERROR_CONTENT_MESSAGES.items():
-            if keyword in raw_message:
+            if keyword.lower() in raw_message_lower:
                 return friendly_msg
+    if status_code == 500:
+        return "服务器返回 500：上游生成失败或服务端临时异常。请稍后重试；如果多次出现，请降低分辨率/数量，或调整提示词。"
     friendly = HTTP_ERROR_MESSAGES.get(status_code)
     if friendly:
         return friendly
@@ -88,7 +96,7 @@ async def async_request_with_retry(
     """
     带退避重试的 aiohttp 请求。
 
-    仅对 RETRYABLE_STATUS_CODES (429/503/504) 进行重试。
+    仅对 RETRYABLE_STATUS_CODES (429/502/503/504/524) 进行重试。
     超过最大重试次数后抛出友好 RuntimeError。
     成功时返回 response 对象（调用者需在 async with 外自行处理 body）。
 

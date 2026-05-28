@@ -17,6 +17,17 @@ from ..utils.config import get_api_key_or_raise, get_async_api_base_url, NETWORK
 from ..utils.r2_uploader import upload_video, upload_image
 from ..utils.image_utils import tensor_to_pil
 from ..utils.http_error import async_request_with_retry
+from ..utils.video_task import (
+    check_interrupt,
+    extract_error_message,
+    extract_progress,
+    extract_status,
+    extract_video_url,
+    interruptible_sleep,
+    is_failure_status,
+    is_success_status,
+    run_with_interrupt,
+)
 
 try:
     from comfy_api.latest import InputImpl
@@ -183,8 +194,10 @@ class K3MotionControl:
 
         # ── 图片 & 视频上传 R2 → 获取公网 URL ────────────────────────
         _stage("uploading")
+        check_interrupt()
         pil_list  = tensor_to_pil(参考图片)
         image_url = await upload_image(pil_list[0].convert("RGB"))
+        check_interrupt()
         video_url = await upload_video(参考视频)
 
         # ── 构建请求体 ────────────────────────────────────────────────
@@ -207,13 +220,15 @@ class K3MotionControl:
         async with aiohttp.ClientSession(connector=connector) as session:
 
             # 1. 提交任务
+            check_interrupt()
             _stage("submitting")
             create_url = f"{base_url}{_ENDPOINT_CREATE}"
-            resp = await async_request_with_retry(
+            resp = await run_with_interrupt(async_request_with_retry(
                 session, "POST", create_url,
                 data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                 headers=headers, prefix="K3 动作控制提交: "
-            )
+            ))
+            check_interrupt()
             text = await resp.text()
             create_resp = json.loads(text)
 
@@ -233,7 +248,8 @@ class K3MotionControl:
             video_result_url = None
 
             while True:
-                await asyncio.sleep(interval)
+                await interruptible_sleep(interval)
+                check_interrupt()
                 async with session.get(status_url, headers=headers) as resp:
                     text = await resp.text()
                     if resp.status != 200:
@@ -247,30 +263,17 @@ class K3MotionControl:
 
                 # 兼容扁平结构和 data 嵌套结构
                 data   = sr.get("data", sr)
-                status = (data.get("status") or sr.get("status") or "").lower()
+                status = extract_status(sr)
 
-                pct_raw = data.get("progress", 0)
-                try:
-                    pct = int(str(pct_raw).rstrip("%").strip())
-                except (ValueError, AttributeError):
-                    pct = 0
+                pct = extract_progress(sr)
                 print(f"[K3 动作控制] 生成中 {pct}%")
                 _progress(pct)
 
-                if status in ("success", "completed", "done", "finished", "succeed"):
-                    video_result_url = (
-                        data.get("video_url")
-                        or data.get("result_url")
-                        or data.get("url")
-                        or (data.get("result", {}) or {}).get("url")
-                        or sr.get("video_url")
-                        or sr.get("url")
-                    )
+                if is_success_status(status):
+                    video_result_url = extract_video_url(sr)
                     break
-                elif status in ("failed", "fail"):
-                    err_info = data.get("error") or sr.get("error") or {}
-                    err_msg  = (err_info.get("message", "未知错误")
-                                if isinstance(err_info, dict) else str(err_info))
+                elif is_failure_status(status, sr):
+                    err_msg = extract_error_message(sr)
                     raise RuntimeError(f"K3 动作控制生成失败：{err_msg}")
 
                 interval = min(interval * 1.3, _POLL_MAX)
@@ -279,6 +282,7 @@ class K3MotionControl:
                 raise RuntimeError(f"API 未返回视频 URL，响应：{sr}")
 
             # 3. 下载视频
+            check_interrupt()
             _stage("downloading")
             async with session.get(video_result_url, allow_redirects=True) as resp:
                 if resp.status != 200:
@@ -286,6 +290,7 @@ class K3MotionControl:
                 os.close(tmp_fd)
                 with open(save_path, "wb") as f:
                     async for chunk in resp.content.iter_chunked(8192):
+                        check_interrupt()
                         f.write(chunk)
 
         _stage("done")

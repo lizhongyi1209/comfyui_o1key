@@ -20,11 +20,12 @@ _seeder_filter = lambda record: not any(
 )
 logging.getLogger().addFilter(_seeder_filter)
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, O1keyGrokImage, KVideoFirstLast, KVideoImage2Video
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, O1keyGPTImageBatch, O1keyGrokImage, KVideoFirstLast, KVideoImage2Video
 from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck, NanoBananaV2, NanoBananaV2Batch, SaveImageFormat
 from .nodes import O1keySavePSD
 from .nodes import O1keyRemoveBackground
 from .nodes import O1keyColorRemoveBG
+from .nodes import O1keyGridSplitter
 
 # 报错弹框友好文案（不修改原节点代码，仅在外层统一处理）
 _MSG_TIMEOUT = "API 请求超时，请稍后重试或检查网络。"
@@ -85,6 +86,7 @@ NODE_CLASS_MAPPINGS = {
     "StreamPreview": StreamPreview,
     "DoubaoImage": DoubaoImage,
     "O1keyGPTImage": O1keyGPTImage,
+    "O1keyGPTImageBatch": O1keyGPTImageBatch,
     "O1keyGrokImage": O1keyGrokImage,
     "KVideoFirstLast": KVideoFirstLast,
     "KVideoImage2Video": KVideoImage2Video,
@@ -98,6 +100,7 @@ NODE_CLASS_MAPPINGS = {
     "O1keySavePSD": O1keySavePSD,
     "O1keyRemoveBackground": O1keyRemoveBackground,
     "O1keyColorRemoveBG": O1keyColorRemoveBG,
+    "O1keyGridSplitter": O1keyGridSplitter,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -123,6 +126,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "StreamPreview": "流式文本预览",
     "DoubaoImage": "豆包生图",
     "O1keyGPTImage": "o1key GPT Image",
+    "O1keyGPTImageBatch": "o1key GPT Image（批量）",
     "O1keyGrokImage": "Grok Image",
     "KVideoFirstLast": "K26 图生视频（首尾帧）",
     "KVideoImage2Video": "K26 图生视频",
@@ -136,6 +140,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "O1keySavePSD": "保存 PSD（分层）",
     "O1keyRemoveBackground": "去背景（rembg）",
     "O1keyColorRemoveBG": "颜色去背景",
+    "O1keyGridSplitter": "合并图智能切割",
 }
 
 WEB_DIRECTORY = "./web"
@@ -148,6 +153,35 @@ try:
     from server import PromptServer
     import folder_paths
     from .utils.config import CONFIG_FILE, load_config, NETWORK_ROUTES
+
+    def _get_o1key_server_port():
+        try:
+            import comfy.cli_args as _cli_args
+            args = getattr(_cli_args, "args", None)
+            port = getattr(args, "port", None) if args else None
+            port = port or getattr(_cli_args, "server_port", None) or getattr(_cli_args, "port", None)
+            if port is not None:
+                return str(int(port))
+        except Exception:
+            pass
+        try:
+            import sys as _sys
+            for idx, arg in enumerate(_sys.argv):
+                if arg in ("--port", "--listen-port") and idx + 1 < len(_sys.argv):
+                    return str(int(_sys.argv[idx + 1]))
+                for prefix in ("--port=", "--listen-port="):
+                    if arg.startswith(prefix):
+                        return str(int(arg.split("=", 1)[1]))
+        except Exception:
+            pass
+        return "8188"
+
+    def _get_o1key_history_meta_file(output_dir):
+        import os as _os_history
+        return _os_history.path.join(
+            output_dir,
+            f".o1key_history_{_get_o1key_server_port()}.json",
+        )
 
     @PromptServer.instance.routes.get("/o1key/input_dir")
     async def get_input_dir(request):
@@ -220,11 +254,11 @@ try:
     @PromptServer.instance.routes.get("/o1key/output_history")
     async def get_output_history(request):
         """读取 output 目录文件，按执行分组返回 /api/jobs 兼容格式"""
-        import os, uuid, json as _json
+        import os, json as _json
         limit = int(request.query.get("limit", "200"))
         offset = int(request.query.get("offset", "0"))
         output_dir = os.path.abspath(folder_paths.get_output_directory())
-        meta_file = os.path.join(output_dir, ".o1key_history.json")
+        meta_file = _get_o1key_history_meta_file(output_dir)
         meta = {}
         if os.path.isfile(meta_file):
             try:
@@ -235,7 +269,7 @@ try:
         supported_ext = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm'}
         # 收集所有文件并按 workflow_id 分组
         all_files = []
-        for fname in os.listdir(output_dir):
+        for fname in meta.keys():
             ext = os.path.splitext(fname)[1].lower()
             if ext not in supported_ext:
                 continue
@@ -247,14 +281,11 @@ try:
             all_files.append({"name": fname, "mtime": mtime, "media": media})
         # 按 workflow_id 分组（同一次执行合并为一个 job）
         groups = {}
-        ungrouped = []
         for f in all_files:
             m = meta.get(f["name"], {})
             wid = m.get("workflow_id")
             if wid:
                 groups.setdefault(wid, []).append((f, m))
-            else:
-                ungrouped.append((f, {}))
         # 构建 job 列表
         jobs = []
         for wid, items in groups.items():
@@ -279,27 +310,6 @@ try:
                 "outputs_count": len(items),
                 "execution_error": None,
                 "workflow_id": wid,
-            })
-        # 无元数据的文件各自作为独立 job
-        for f, m in ungrouped:
-            mtime_ms = int(f["mtime"] * 1000)
-            job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f["name"]))
-            jobs.append({
-                "id": job_id,
-                "status": "completed",
-                "create_time": mtime_ms,
-                "execution_start_time": mtime_ms,
-                "execution_end_time": mtime_ms,
-                "preview_output": {
-                    "filename": f["name"],
-                    "subfolder": "",
-                    "type": "output",
-                    "nodeId": "0",
-                    "mediaType": f["media"],
-                },
-                "outputs_count": 1,
-                "execution_error": None,
-                "workflow_id": None,
             })
         # 按时间倒序排列，分页
         jobs.sort(key=lambda x: x["create_time"], reverse=True)
@@ -349,11 +359,11 @@ try:
 
     @PromptServer.instance.routes.get("/o1key/job_detail/{job_id}")
     async def get_job_detail(request):
-        """根据 job_id (workflow_id 或 uuid5) 返回含工作流的 job 详情"""
-        import os, uuid, struct, json as _json
+        """根据 job_id 返回当前端口持久化历史中的 job 详情"""
+        import os, struct, json as _json
         job_id = request.match_info["job_id"]
         output_dir = os.path.abspath(folder_paths.get_output_directory())
-        meta_file = os.path.join(output_dir, ".o1key_history.json")
+        meta_file = _get_o1key_history_meta_file(output_dir)
         meta = {}
         if os.path.isfile(meta_file):
             try:
@@ -362,16 +372,14 @@ try:
             except Exception:
                 pass
         supported_ext = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm'}
-        # 查找属于该 job 的所有文件（按 workflow_id 或 uuid5 匹配）
+        # 只在当前端口的持久化记录中查找该 job 的文件
         matched_files = []
-        for fname in os.listdir(output_dir):
+        for fname in meta.keys():
             ext = os.path.splitext(fname)[1].lower()
             if ext not in supported_ext:
                 continue
             m = meta.get(fname, {})
             if m.get("workflow_id") == job_id:
-                matched_files.append(fname)
-            elif str(uuid.uuid5(uuid.NAMESPACE_URL, fname)) == job_id:
                 matched_files.append(fname)
         if not matched_files:
             return web.json_response({"error": "not found"}, status=404)
@@ -444,13 +452,13 @@ try:
     @PromptServer.instance.routes.post("/o1key/delete_history")
     async def delete_history_item(request):
         """删除持久化历史记录及对应的输出文件"""
-        import os, uuid, json as _json
+        import os, json as _json
         body = await request.json()
         job_ids = body.get("delete", [])
         if not job_ids:
             return web.json_response({"success": False, "error": "missing ids"}, status=400)
         output_dir = os.path.abspath(folder_paths.get_output_directory())
-        meta_file = os.path.join(output_dir, ".o1key_history.json")
+        meta_file = _get_o1key_history_meta_file(output_dir)
         meta = {}
         if os.path.isfile(meta_file):
             try:
@@ -463,8 +471,6 @@ try:
             files_to_remove = []
             for fname, m in list(meta.items()):
                 if m.get("workflow_id") == job_id:
-                    files_to_remove.append(fname)
-                elif str(uuid.uuid5(uuid.NAMESPACE_URL, fname)) == job_id:
                     files_to_remove.append(fname)
             for fname in files_to_remove:
                 meta.pop(fname, None)
@@ -574,7 +580,7 @@ try:
                     end_time = _time.time()
                     start_time = tracker["start"]
                     output_dir = _os.path.abspath(folder_paths.get_output_directory())
-                    meta_file = _os.path.join(output_dir, ".o1key_history.json")
+                    meta_file = _get_o1key_history_meta_file(output_dir)
                     meta = {}
                     if _os.path.isfile(meta_file):
                         try:

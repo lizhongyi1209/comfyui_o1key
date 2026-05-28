@@ -5,7 +5,8 @@
 
 import base64
 from io import BytesIO
-from typing import List
+import json
+from typing import Callable, List, Tuple
 
 import numpy as np
 import torch
@@ -110,7 +111,130 @@ def encode_image_to_base64(image: Image.Image, format: str = "PNG") -> str:
     return base64.b64encode(img_bytes).decode('utf-8')
 
 
-_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB base64 上限
+_MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024  # 50MB 请求体上限
+
+
+def _encode_image_to_base64_with_quality(image: Image.Image, quality: int) -> str:
+    buffered = BytesIO()
+    working = image
+    if working.mode != 'RGB':
+        working = working.convert('RGB')
+
+    working.save(
+        buffered,
+        format="JPEG",
+        quality=quality,
+        optimize=True,
+        subsampling=2,
+    )
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+
+def encode_images_for_request_body_limit(
+    images: List[Image.Image],
+    build_body: Callable[[List[Tuple[str, str]]], dict],
+    max_body_bytes: int = _MAX_REQUEST_BODY_BYTES,
+) -> List[Tuple[str, str]]:
+    """
+    为请求体编码图片，并保证完整 JSON 请求体不超过 max_body_bytes。
+
+    策略：
+    - 先按原始 PNG 编码估算完整请求体；
+    - 若超过限制，改用 JPEG 质量压缩，逐步降低 quality；
+    - 全程不缩放图片尺寸。
+
+    Returns:
+        [(mime_type, base64), ...]
+    """
+    encoded = [("image/png", encode_image_to_base64(img, format="PNG")) for img in images]
+    body_size = len(json.dumps(build_body(encoded)).encode("utf-8"))
+    if body_size <= max_body_bytes:
+        return encoded
+
+    for quality in [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 10, 5, 1]:
+        encoded = [
+            ("image/jpeg", _encode_image_to_base64_with_quality(img, quality))
+            for img in images
+        ]
+        body_size = len(json.dumps(build_body(encoded)).encode("utf-8"))
+        if body_size <= max_body_bytes:
+            print(
+                f"输入图片已通过 JPEG 质量压缩控制请求体积: "
+                f"quality={quality}, 请求体积={body_size / 1024 / 1024:.2f}MB "
+                f"(限制 {max_body_bytes / 1024 / 1024:.0f}MB)"
+            )
+            return encoded
+
+    raise ValueError(
+        f"请求体超过 {max_body_bytes / 1024 / 1024:.0f}MB，"
+        "即使压缩到最低图片质量仍无法满足限制；请减少参考图数量或输入图片内容复杂度"
+    )
+
+
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB 单张图片上限
+
+
+def _encode_image_to_bytes(image: Image.Image, format: str = "PNG", quality: int = None) -> bytes:
+    buffered = BytesIO()
+    working = image
+
+    if format.upper() == "JPEG" and working.mode != 'RGB':
+        working = working.convert('RGB')
+    elif working.mode == 'RGBA':
+        working = working.convert('RGB')
+
+    save_kwargs = {"format": format}
+    if quality is not None:
+        save_kwargs.update({
+            "quality": quality,
+            "optimize": True,
+            "subsampling": 2,
+        })
+
+    working.save(buffered, **save_kwargs)
+    return buffered.getvalue()
+
+
+def encode_images_for_image_size_limit(
+    images: List[Image.Image],
+    max_image_bytes: int = _MAX_IMAGE_BYTES,
+) -> List[Tuple[str, str]]:
+    """
+    将图片编码为 base64，并保证每张编码前的图片文件体积不超过 max_image_bytes。
+
+    策略：
+    - 先尝试 PNG 原图尺寸编码；
+    - 单张超过限制时，改用 JPEG 质量压缩；
+    - 全程不缩放图片尺寸。
+
+    Returns:
+        [(mime_type, base64), ...]
+    """
+    encoded = []
+
+    for idx, img in enumerate(images, start=1):
+        png_bytes = _encode_image_to_bytes(img, format="PNG")
+        if len(png_bytes) <= max_image_bytes:
+            encoded.append(("image/png", base64.b64encode(png_bytes).decode('utf-8')))
+            continue
+
+        for quality in [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 10, 5, 1]:
+            jpg_bytes = _encode_image_to_bytes(img, format="JPEG", quality=quality)
+            if len(jpg_bytes) <= max_image_bytes:
+                print(
+                    f"输入图片 {idx} 已通过 JPEG 质量压缩控制单图体积: "
+                    f"quality={quality}, 图片体积={len(jpg_bytes) / 1024 / 1024:.2f}MB "
+                    f"(限制 {max_image_bytes / 1024 / 1024:.0f}MB)，尺寸保持 {img.width}x{img.height}"
+                )
+                encoded.append(("image/jpeg", base64.b64encode(jpg_bytes).decode('utf-8')))
+                break
+        else:
+            raise ValueError(
+                f"输入图片 {idx} 超过 {max_image_bytes / 1024 / 1024:.0f}MB，"
+                "即使压缩到最低图片质量仍无法满足限制；请减少图片内容复杂度或手动处理图片"
+            )
+
+    return encoded
 
 
 def encode_image_to_base64_limited(

@@ -11,6 +11,16 @@ import aiohttp
 
 from ..utils.config import get_api_key_or_raise, get_api_base_url
 from ..utils.http_error import async_request_with_retry
+from ..utils.video_task import (
+    check_interrupt,
+    extract_error_message,
+    extract_progress,
+    extract_status,
+    interruptible_sleep,
+    is_failure_status,
+    is_success_status,
+    run_with_interrupt,
+)
 
 
 class KlingClient:
@@ -50,9 +60,11 @@ class KlingClient:
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{self.ENDPOINTS[endpoint_type]}"
 
-        resp = await async_request_with_retry(
+        check_interrupt()
+        resp = await run_with_interrupt(async_request_with_retry(
             session, "POST", url, json=body, headers=self._headers(), prefix="Kling 提交: "
-        )
+        ))
+        check_interrupt()
         text = await resp.text()
         return json.loads(text)
 
@@ -69,6 +81,7 @@ class KlingClient:
         interval = self.POLL_INITIAL_INTERVAL
 
         while True:
+            check_interrupt()
             async with session.get(url, headers=self._headers()) as resp:
                 text = await resp.text()
                 if resp.status != 200:
@@ -77,36 +90,22 @@ class KlingClient:
 
             data = result.get("data", {})
             inner_data = data.get("data", {}) if isinstance(data, dict) else {}
-            status = (
-                data.get("status") or
-                inner_data.get("task_status") or
-                result.get("status") or
-                ""
-            )
-            status = status.lower() if status else ""
+            status = extract_status(result)
 
-            progress_str = data.get("progress", "0%")
-            try:
-                progress_pct = int(str(progress_str).replace("%", "").strip())
-            except (ValueError, AttributeError):
-                progress_pct = 0
+            progress_pct = extract_progress(result)
 
             print(f"[视频生成] 生成中 {progress_pct}%")
 
             if on_progress:
                 on_progress(progress_pct)
 
-            if status in ("success", "completed", "done", "finished", "succeed"):
+            if is_success_status(status):
                 return result
-            elif status in ("failed", "fail"):
-                error_info = result.get("error", {})
-                if isinstance(error_info, dict):
-                    error_msg = error_info.get("message", "未知错误")
-                else:
-                    error_msg = str(error_info)
+            elif is_failure_status(status, result):
+                error_msg = extract_error_message(result)
                 raise RuntimeError(f"生成失败：{error_msg}")
 
-            await asyncio.sleep(interval)
+            await interruptible_sleep(interval)
             interval = min(interval * 1.5, self.POLL_MAX_INTERVAL)
 
     # ── 下载视频 ──────────────────────────────────────────────────────
@@ -118,12 +117,14 @@ class KlingClient:
         session: aiohttp.ClientSession,
     ) -> str:
         print("[视频生成] 下载视频...")
+        check_interrupt()
         async with session.get(video_url, allow_redirects=True) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"视频下载失败 ({resp.status})")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with open(save_path, "wb") as f:
                 async for chunk in resp.content.iter_chunked(8192):
+                    check_interrupt()
                     f.write(chunk)
         return save_path
 
@@ -201,12 +202,14 @@ class KlingClient:
         async with aiohttp.ClientSession(connector=connector) as session:
 
             # 1. 提交
+            check_interrupt()
             if on_stage:
                 on_stage("submitting")
             create_url = f"{self.base_url}{self.NEW_API_CREATE}"
-            resp = await async_request_with_retry(
+            resp = await run_with_interrupt(async_request_with_retry(
                 session, "POST", create_url, json=body, headers=headers, prefix="Kling 动作控制提交: "
-            )
+            ))
+            check_interrupt()
             text = await resp.text()
             create_resp = json.loads(text)
 
@@ -219,6 +222,7 @@ class KlingClient:
             # 2. 轮询
             status_url = f"{self.base_url}{self.NEW_API_STATUS.format(video_id=video_id)}"
             while True:
+                check_interrupt()
                 async with session.get(status_url, headers=headers) as resp:
                     text = await resp.text()
                     if resp.status != 200:
@@ -230,29 +234,24 @@ class KlingClient:
                         raise RuntimeError(f"状态查询失败 ({resp.status}): {msg}")
                     status_resp = json.loads(text)
 
-                status = status_resp.get("status", "").lower()
-                progress_raw = status_resp.get("progress", 0)
-                try:
-                    progress_pct = int(str(progress_raw).rstrip("%").strip())
-                except (ValueError, AttributeError):
-                    progress_pct = 0
+                status = extract_status(status_resp)
+                progress_pct = extract_progress(status_resp)
 
                 print(f"[动作控制] 生成中 {progress_pct}%")
                 if on_progress:
                     on_progress(progress_pct)
 
-                if status == "completed":
+                if is_success_status(status):
                     break
-                if status == "failed":
-                    error_info = status_resp.get("error", {})
-                    error_msg = (error_info.get("message", "未知错误")
-                                 if isinstance(error_info, dict) else str(error_info))
+                if is_failure_status(status, status_resp):
+                    error_msg = extract_error_message(status_resp)
                     raise RuntimeError(f"动作控制生成失败：{error_msg}")
 
-                await asyncio.sleep(interval)
+                await interruptible_sleep(interval)
                 interval = min(interval * 1.5, self.POLL_MAX_INTERVAL)
 
             # 3. 下载
+            check_interrupt()
             if on_stage:
                 on_stage("downloading")
             content_url = f"{self.base_url}{self.NEW_API_CONTENT.format(video_id=video_id)}"
@@ -272,14 +271,15 @@ class KlingClient:
                         os.makedirs(os.path.dirname(save_path), exist_ok=True)
                         with open(save_path, "wb") as f:
                             async for chunk in dl_resp.content.iter_chunked(8192):
+                                check_interrupt()
                                 f.write(chunk)
                 else:
                     os.makedirs(os.path.dirname(save_path), exist_ok=True)
                     with open(save_path, "wb") as f:
                         async for chunk in resp.content.iter_chunked(8192):
+                            check_interrupt()
                             f.write(chunk)
 
             if on_stage:
                 on_stage("done")
             return save_path
-

@@ -20,7 +20,7 @@ from PIL import Image
 import torch
 import numpy as np
 
-from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts, encode_image_to_base64, encode_image_to_base64_limited
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts, encode_images_for_request_body_limit
 from ..utils.file_utils import (
     ImageInfo,
     load_images_from_folder,
@@ -95,22 +95,6 @@ def _build_request_body(
     images: Optional[List[Image.Image]] = None,
     enable_grounding: bool = False,
 ) -> dict:
-    content_parts = [{"type": "text", "text": prompt}]
-
-    if images:
-        for img in images:
-            b64 = encode_image_to_base64_limited(img, format="PNG")
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"}
-            })
-
-    body = {
-        "model": model,
-        "stream": True,
-        "messages": [{"role": "user", "content": content_parts}],
-    }
-
     google_config = {
         "image_config": {
             "image_size": resolution,
@@ -118,12 +102,32 @@ def _build_request_body(
     }
     if aspect_ratio and aspect_ratio != "智能":
         google_config["image_config"]["aspect_ratio"] = aspect_ratio
-    body["extra_body"] = {"google": google_config}
 
-    if enable_grounding:
-        body["extra_body"]["google_search"] = True
+    def _make_body(encoded_images: Optional[List[tuple]] = None) -> dict:
+        content_parts = [{"type": "text", "text": prompt}]
+        if encoded_images:
+            for mime_type, b64 in encoded_images:
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{b64}"}
+                })
 
-    return body
+        body = {
+            "model": model,
+            "stream": True,
+            "messages": [{"role": "user", "content": content_parts}],
+            "extra_body": {"google": google_config},
+        }
+
+        if enable_grounding:
+            body["extra_body"]["google_search"] = True
+        return body
+
+    encoded_images = None
+    if images:
+        encoded_images = encode_images_for_request_body_limit(images, _make_body)
+
+    return _make_body(encoded_images)
 
 
 async def _generate_single_openai(

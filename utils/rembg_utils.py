@@ -3,6 +3,7 @@
 基于 rembg 库实现，支持 CPU 推理
 """
 
+import os
 import numpy as np
 import torch
 from PIL import Image
@@ -14,6 +15,13 @@ def _get_session():
     """懒加载 rembg session，避免启动时加载模型"""
     global _session
     if _session is None:
+        try:
+            import folder_paths
+            models_dir = os.path.join(folder_paths.models_dir, "rembg")
+            os.makedirs(models_dir, exist_ok=True)
+            os.environ["U2NET_HOME"] = models_dir
+        except Exception:
+            pass
         try:
             from rembg import new_session
             _session = new_session("isnet-general-use")

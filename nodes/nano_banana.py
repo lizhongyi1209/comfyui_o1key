@@ -22,7 +22,7 @@ from PIL import Image
 
 from comfy_api.latest import io
 
-from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts, encode_image_to_base64, encode_image_to_base64_limited
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts, encode_images_for_image_size_limit
 from ..utils.config import (
     NETWORK_ROUTE_OPTIONS,
     get_base_url_by_route,
@@ -44,6 +44,14 @@ except ImportError:
     PROGRESS_BAR_AVAILABLE = False
 
 try:
+    from comfy.model_management import processing_interrupted, InterruptProcessingException
+    INTERRUPT_AVAILABLE = True
+except ImportError:
+    INTERRUPT_AVAILABLE = False
+    InterruptProcessingException = RuntimeError
+    processing_interrupted = lambda: False
+
+try:
     import psutil
     MEMORY_MONITOR_AVAILABLE = True
 except ImportError:
@@ -54,6 +62,8 @@ REQUEST_LOG_ENABLED = False
 
 _NODE = "Nano Banana"
 _ENDPOINT = "/v1/chat/completions"
+_REQUEST_TIMEOUT = 900
+_INTERRUPT_CHECK_INTERVAL = 0.2
 
 _client_instance = None
 
@@ -63,6 +73,43 @@ def _get_client():
     if _client_instance is None:
         _client_instance = GeminiAPIClient()
     return _client_instance
+
+
+async def _poll_interrupt():
+    while True:
+        await asyncio.sleep(_INTERRUPT_CHECK_INTERVAL)
+        if INTERRUPT_AVAILABLE and processing_interrupted():
+            return
+
+
+async def _run_with_interrupt(coro):
+    if not INTERRUPT_AVAILABLE:
+        return await coro
+
+    request_task = asyncio.ensure_future(coro)
+    interrupt_task = asyncio.ensure_future(_poll_interrupt())
+
+    done, pending = await asyncio.wait(
+        [request_task, interrupt_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    if interrupt_task in done and request_task not in done:
+        raise InterruptProcessingException()
+
+    return request_task.result()
+
+
+def _check_interrupt():
+    if INTERRUPT_AVAILABLE and processing_interrupted():
+        raise InterruptProcessingException()
 
 
 def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.Tensor:
@@ -143,22 +190,6 @@ def _build_request_body(
     enable_grounding: bool = False,
     thinking_level: Optional[str] = None,
 ) -> dict:
-    content_parts = [{"type": "text", "text": prompt}]
-
-    if images:
-        for img in images:
-            b64 = encode_image_to_base64_limited(img, format="PNG")
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"}
-            })
-
-    body = {
-        "model": model,
-        "stream": True,
-        "messages": [{"role": "user", "content": content_parts}],
-    }
-
     google_config = {
         "image_config": {
             "image_size": resolution,
@@ -171,12 +202,32 @@ def _build_request_body(
             "thinking_level": thinking_level.lower(),
             "include_thoughts": True,
         }
-    body["extra_body"] = {"google": google_config}
 
-    if enable_grounding:
-        body["extra_body"]["google_search"] = True
+    def _make_body(encoded_images: Optional[List[tuple]] = None) -> dict:
+        content_parts = [{"type": "text", "text": prompt}]
+        if encoded_images:
+            for mime_type, b64 in encoded_images:
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{b64}"}
+                })
 
-    return body
+        body = {
+            "model": model,
+            "stream": True,
+            "messages": [{"role": "user", "content": content_parts}],
+            "extra_body": {"google": google_config},
+        }
+
+        if enable_grounding:
+            body["extra_body"]["google_search"] = True
+        return body
+
+    encoded_images = None
+    if images:
+        encoded_images = encode_images_for_image_size_limit(images)
+
+    return _make_body(encoded_images)
 
 
 async def _generate_single(
@@ -208,8 +259,11 @@ async def _generate_single(
         print(f"[请求] POST {url} | model={model} | extra_body={extra}")
 
     last_status = None
+    resp = None
+    timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT, connect=30, sock_read=_REQUEST_TIMEOUT)
     for attempt in range(DEFAULT_MAX_RETRIES + 1):
-        resp = await session.post(url, headers=headers, json=body)
+        _check_interrupt()
+        resp = await session.post(url, headers=headers, json=body, timeout=timeout)
         if resp.status == 200:
             break
         last_status = resp.status
@@ -239,27 +293,36 @@ async def _generate_single(
     buffer = ""
     t_request = time.time()
     t_first_token = None
-    async for raw_chunk in resp.content.iter_any():
-        if t_first_token is None:
-            t_first_token = time.time()
-        buffer += raw_chunk.decode("utf-8")
-        while "\n" in buffer:
-            line_str, buffer = buffer.split("\n", 1)
-            line_str = line_str.strip()
-            if not line_str or not line_str.startswith("data:"):
-                continue
-            data_str = line_str[5:].strip()
-            if data_str == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data_str)
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                if "content" in delta:
-                    full_content += delta["content"]
-            except (json.JSONDecodeError, IndexError):
-                continue
+    try:
+        async for raw_chunk in resp.content.iter_any():
+            _check_interrupt()
+            if t_first_token is None:
+                t_first_token = time.time()
+            buffer += raw_chunk.decode("utf-8")
+            while "\n" in buffer:
+                line_str, buffer = buffer.split("\n", 1)
+                line_str = line_str.strip()
+                if not line_str or not line_str.startswith("data:"):
+                    continue
+                data_str = line_str[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    if "content" in delta:
+                        full_content += delta["content"]
+                except (json.JSONDecodeError, IndexError):
+                    continue
+    except aiohttp.ClientPayloadError as e:
+        if full_content and _IMAGE_RE.search(full_content):
+            print(f"Nano Banana: 响应流提前结束，但已收到完整图片，继续解析 ({e})")
+        else:
+            raise RuntimeError(f"响应流下载中断，请重试或检查网络/代理: {e}") from None
+    finally:
+        if resp is not None:
+            resp.close()
     t_done = time.time()
-    resp.close()
 
     if not full_content:
         raise RuntimeError("API 未返回有效内容")
@@ -316,6 +379,8 @@ async def _generate_single_task(
         result["output_images"] = gen_images
         result["success"] = True
         result["generated_count"] = len(gen_images)
+    except InterruptProcessingException:
+        raise
     except Exception as e:
         result["error"] = str(e)
     return result
@@ -352,11 +417,13 @@ async def _process_batch_async(
 
     async with aiohttp.ClientSession(connector=connector) as session:
         for batch_idx in range(num_batches):
+            _check_interrupt()
             start_idx = batch_idx * max_concurrent
             end_idx = min(start_idx + max_concurrent, total_tasks)
 
             tasks = []
             for i in range(start_idx, end_idx):
+                _check_interrupt()
                 _, _, prompt = tasks_def[i]
                 task = asyncio.create_task(
                     _generate_single_task(
@@ -377,6 +444,7 @@ async def _process_batch_async(
 
             batch_results = []
             for coro in asyncio.as_completed(tasks):
+                _check_interrupt()
                 result_data = None
                 try:
                     result = await coro
@@ -384,6 +452,11 @@ async def _process_batch_async(
                         result_data = {"success": False, "error": str(result), "generated_count": 0, "output_images": [], "prompt": ""}
                     else:
                         result_data = result
+                except InterruptProcessingException:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
                 except Exception as e:
                     result_data = {"success": False, "error": str(e), "generated_count": 0, "output_images": [], "prompt": ""}
 
@@ -472,6 +545,7 @@ class NanoBanana(io.ComfyNode):
     @classmethod
     def execute(cls, prompt, 模型, 生图数量, 计费, 网络, 谷歌搜索, seed, **kwargs) -> io.NodeOutput:
         start_time = time.time()
+        was_interrupted = False
 
         model_name = 模型["模型"]
         宽高比 = 模型["宽高比"]
@@ -533,7 +607,7 @@ class NanoBanana(io.ComfyNode):
                     asyncio.set_event_loop(loop)
                     try:
                         return loop.run_until_complete(
-                            _process_batch_async(
+                            _run_with_interrupt(_process_batch_async(
                                 base_url=base_url,
                                 api_key=api_key,
                                 prompts=prompts,
@@ -545,7 +619,7 @@ class NanoBanana(io.ComfyNode):
                                 pbar=pbar,
                                 enable_grounding=enable_grounding,
                                 thinking_level=thinking_level,
-                            )
+                            ))
                         )
                     finally:
                         loop.close()
@@ -553,9 +627,9 @@ class NanoBanana(io.ComfyNode):
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(run_async_in_thread)
                     try:
-                        results = future.result(timeout=900)
+                        results = future.result(timeout=_REQUEST_TIMEOUT)
                     except TimeoutError:
-                        raise RuntimeError("任务执行超时（900秒）")
+                        raise RuntimeError(f"任务执行超时（{_REQUEST_TIMEOUT}秒）")
 
                 success_count = sum(1 for r in results if r.get("success", False))
                 fail_count = len(results) - success_count
@@ -594,13 +668,13 @@ class NanoBanana(io.ComfyNode):
                                     enable_grounding=enable_grounding,
                                     thinking_level=thinking_level,
                                 )
-                        return loop.run_until_complete(_do())
+                        return loop.run_until_complete(_run_with_interrupt(_do()))
                     finally:
                         loop.close()
 
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(run_single)
-                    generated_images, first_token_ms, download_ms = future.result(timeout=900)
+                    generated_images, first_token_ms, download_ms = future.result(timeout=_REQUEST_TIMEOUT)
 
                 if pbar is not None:
                     pbar.update(1)
@@ -615,6 +689,10 @@ class NanoBanana(io.ComfyNode):
                 import gc; gc.collect()
                 return io.NodeOutput(output_tensor)
 
+        except InterruptProcessingException:
+            was_interrupted = True
+            print("Nano Banana: 用户取消")
+            raise
         except ValueError as e:
             if str(e) == "未授权！":
                 print("请联系作者授权后方可使用！")
@@ -625,12 +703,13 @@ class NanoBanana(io.ComfyNode):
         except Exception as e:
             raise type(e)(str(e)) from None
         finally:
-            try:
-                client = _get_client()
-                client.base_url = base_url
-                balance_data = client.query_balance_sync()
-                balance_info = client.format_balance_info(balance_data)
-                print(f"Nano Banana: {balance_info}")
-            except Exception:
-                pass
+            if not was_interrupted:
+                try:
+                    client = _get_client()
+                    client.base_url = base_url
+                    balance_data = client.query_balance_sync()
+                    balance_info = client.format_balance_info(balance_data)
+                    print(f"Nano Banana: {balance_info}")
+                except Exception:
+                    pass
             import gc; gc.collect()

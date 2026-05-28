@@ -20,7 +20,7 @@ from .batch_images_o1key import BatchImagesO1key
 from .seedance_video import Seedance, SeedanceMultiModal
 from .nano_banana_v2 import NanoBananaV2, NanoBananaV2Batch, AsyncImageGenerator, BatchAsyncImageGenerator
 from .doubao_image import DoubaoImage
-from .gpt_image import O1keyGPTImage
+from .gpt_image import O1keyGPTImage, O1keyGPTImageBatch
 from .grok_image import O1keyGrokImage
 from .K_video_firstlast import KVideoFirstLast
 from .K_video_image2video import KVideoImage2Video
@@ -31,5 +31,6 @@ from .save_image_format import SaveImageFormat
 from .save_psd import O1keySavePSD
 from .remove_bg import O1keyRemoveBackground
 from .color_remove_bg import O1keyColorRemoveBG
+from .grid_splitter import O1keyGridSplitter
 
-__all__ = ['NanoBananaV2', 'NanoBananaV2Batch', 'NanoBanana', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'O1keyGrokImage', 'KVideoFirstLast', 'KVideoImage2Video', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator', 'SaveImageFormat', 'O1keySavePSD', 'O1keyRemoveBackground', 'O1keyColorRemoveBG']
+__all__ = ['NanoBananaV2', 'NanoBananaV2Batch', 'NanoBanana', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'O1keyGPTImageBatch', 'O1keyGrokImage', 'KVideoFirstLast', 'KVideoImage2Video', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator', 'SaveImageFormat', 'O1keySavePSD', 'O1keyRemoveBackground', 'O1keyColorRemoveBG', 'O1keyGridSplitter']

@@ -25,6 +25,7 @@ const STYLES = `
 .pb-toolbar .pb-sep { width:1px; height:24px; background:#555; margin:0 4px; }
 .pb-toolbar input[type=color] { width:32px; height:28px; border:none; padding:0; cursor:pointer; border-radius:4px; }
 .pb-toolbar input[type=range] { width:80px; accent-color:#0066ff; }
+.pb-toolbar input.pb-mosaic-size { width:90px; }
 .pb-toolbar .pb-label { color:#aaa; font-size:12px; }
 .pb-canvas-wrap { border:2px solid #444; border-radius:4px; overflow:hidden; }
 .pb-actions { display:flex; gap:10px; margin-top:10px; }
@@ -39,6 +40,64 @@ function injectStyles() {
   el.id = "pb-styles";
   el.textContent = STYLES;
   document.head.appendChild(el);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+const PB_EXPORT_PROPS = ["pbTool"];
+
+function clampPointer(canvas, pointer) {
+  return {
+    x: clamp(pointer.x, 0, canvas.width),
+    y: clamp(pointer.y, 0, canvas.height),
+  };
+}
+
+function makeCircleCursor(size) {
+  const cursorSize = clamp(Math.round(size), 18, 80);
+  const center = cursorSize / 2;
+  const hotspot = Math.round(center);
+  const radius = Math.max(3, center - 2);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${cursorSize}" height="${cursorSize}" viewBox="0 0 ${cursorSize} ${cursorSize}">
+      <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="black" stroke-width="3"/>
+      <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="white" stroke-width="1.5"/>
+    </svg>
+  `.trim();
+  return `url("data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}") ${hotspot} ${hotspot}, crosshair`;
+}
+
+function applyMosaicCursor(canvas, state) {
+  const cursor = makeCircleCursor(state.mosaicSize);
+  canvas.defaultCursor = cursor;
+  canvas.hoverCursor = cursor;
+}
+
+function configureMosaicObject(obj) {
+  obj.set({
+    selectable: false,
+    hasControls: false,
+    hasBorders: false,
+    lockMovementX: true,
+    lockMovementY: true,
+    lockScalingX: true,
+    lockScalingY: true,
+    lockRotation: true,
+    perPixelTargetFind: true,
+    objectCaching: false,
+  });
+  obj.pbTool = "mosaic";
+  return obj;
+}
+
+function normalizeMosaicObjects(canvas) {
+  canvas.getObjects().forEach((obj) => {
+    if (obj.pbTool === "mosaic" || obj.type === "image") {
+      configureMosaicObject(obj);
+    }
+  });
 }
 
 // --- Get current image URL from node ---
@@ -71,7 +130,7 @@ class HistoryManager {
     if (this.locked) return;
     this.index++;
     this.stack.length = this.index;
-    this.stack.push(this.canvas.toJSON());
+    this.stack.push(this.canvas.toJSON(PB_EXPORT_PROPS));
   }
   undo() {
     if (this.index <= 0) return;
@@ -86,6 +145,7 @@ class HistoryManager {
   _restore() {
     this.locked = true;
     this.canvas.loadFromJSON(this.stack[this.index], () => {
+      normalizeMosaicObjects(this.canvas);
       this.canvas.renderAll();
       this.locked = false;
     });
@@ -97,7 +157,7 @@ function setupShapeDrawing(canvas, state) {
   let startX, startY, shape;
 
   canvas.on("mouse:down", (opt) => {
-    if (state.tool === "select" || state.tool === "brush") return;
+    if (state.tool === "select" || state.tool === "brush" || state.tool === "eraser" || state.tool === "mosaic") return;
     const ptr = canvas.getPointer(opt.e);
     startX = ptr.x;
     startY = ptr.y;
@@ -132,9 +192,244 @@ function setupShapeDrawing(canvas, state) {
   });
 
   canvas.on("mouse:up", () => {
-    if (!state.drawing) return;
+    if (!state.drawing || !shape) return;
     state.drawing = false;
     shape = null;
+  });
+}
+
+// --- Mosaic brush handler ---
+function createMosaicSource(sourceImg, canvas, blockSize) {
+  const scaleX = canvas.width / sourceImg.width;
+  const scaleY = canvas.height / sourceImg.height;
+  const sourceBlockSize = Math.max(1, Math.round(blockSize / Math.min(scaleX, scaleY)));
+  const smallW = Math.max(1, Math.ceil(sourceImg.width / sourceBlockSize));
+  const smallH = Math.max(1, Math.ceil(sourceImg.height / sourceBlockSize));
+
+  const smallCanvas = document.createElement("canvas");
+  smallCanvas.width = smallW;
+  smallCanvas.height = smallH;
+  const smallCtx = smallCanvas.getContext("2d");
+  smallCtx.imageSmoothingEnabled = true;
+  smallCtx.drawImage(sourceImg, 0, 0, sourceImg.width, sourceImg.height, 0, 0, smallW, smallH);
+
+  const pixelCanvas = document.createElement("canvas");
+  pixelCanvas.width = sourceImg.width;
+  pixelCanvas.height = sourceImg.height;
+  const pixelCtx = pixelCanvas.getContext("2d");
+  pixelCtx.imageSmoothingEnabled = false;
+  pixelCtx.drawImage(smallCanvas, 0, 0, smallW, smallH, 0, 0, sourceImg.width, sourceImg.height);
+
+  return pixelCanvas;
+}
+
+function getMosaicBrushBounds(sourceImg, canvas, centerX, centerY, size) {
+  const scaleX = canvas.width / sourceImg.width;
+  const scaleY = canvas.height / sourceImg.height;
+  const sourceX = centerX / scaleX;
+  const sourceY = centerY / scaleY;
+  const radiusX = Math.max(1, (size / 2) / scaleX);
+  const radiusY = Math.max(1, (size / 2) / scaleY);
+
+  return {
+    centerX: sourceX,
+    centerY: sourceY,
+    radius: Math.max(radiusX, radiusY),
+    left: clamp(Math.floor(sourceX - radiusX), 0, sourceImg.width),
+    top: clamp(Math.floor(sourceY - radiusY), 0, sourceImg.height),
+    right: clamp(Math.ceil(sourceX + radiusX), 0, sourceImg.width),
+    bottom: clamp(Math.ceil(sourceY + radiusY), 0, sourceImg.height),
+  };
+}
+
+function expandMosaicBounds(bounds, brushBounds) {
+  if (!bounds.left && bounds.left !== 0) {
+    bounds.left = brushBounds.left;
+    bounds.top = brushBounds.top;
+    bounds.right = brushBounds.right;
+    bounds.bottom = brushBounds.bottom;
+    return;
+  }
+  bounds.left = Math.min(bounds.left, brushBounds.left);
+  bounds.top = Math.min(bounds.top, brushBounds.top);
+  bounds.right = Math.max(bounds.right, brushBounds.right);
+  bounds.bottom = Math.max(bounds.bottom, brushBounds.bottom);
+}
+
+function paintMosaicStamp(sourceImg, canvas, mosaicSource, strokeCtx, bounds, point) {
+  const brushBounds = getMosaicBrushBounds(sourceImg, canvas, point.x, point.y, point.size);
+  if (brushBounds.right <= brushBounds.left || brushBounds.bottom <= brushBounds.top) return false;
+
+  strokeCtx.save();
+  strokeCtx.beginPath();
+  strokeCtx.arc(brushBounds.centerX, brushBounds.centerY, brushBounds.radius, 0, Math.PI * 2);
+  strokeCtx.clip();
+  strokeCtx.drawImage(
+    mosaicSource,
+    brushBounds.left,
+    brushBounds.top,
+    brushBounds.right - brushBounds.left,
+    brushBounds.bottom - brushBounds.top,
+    brushBounds.left,
+    brushBounds.top,
+    brushBounds.right - brushBounds.left,
+    brushBounds.bottom - brushBounds.top
+  );
+  strokeCtx.restore();
+
+  expandMosaicBounds(bounds, brushBounds);
+  return true;
+}
+
+function paintMosaicLine(sourceImg, canvas, mosaicSource, strokeCtx, bounds, from, to, size) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const distance = Math.hypot(dx, dy);
+  const step = Math.max(2, size * 0.25);
+  const steps = Math.max(1, Math.ceil(distance / step));
+  let painted = false;
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    painted = paintMosaicStamp(sourceImg, canvas, mosaicSource, strokeCtx, bounds, {
+      x: from.x + dx * t,
+      y: from.y + dy * t,
+      size,
+    }) || painted;
+  }
+
+  return painted;
+}
+
+function createMosaicStrokeObject(strokeCanvas, bounds, canvas, sourceImg) {
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  if (width < 1 || height < 1) return Promise.resolve(null);
+
+  const cropCanvas = document.createElement("canvas");
+  cropCanvas.width = width;
+  cropCanvas.height = height;
+  cropCanvas.getContext("2d").drawImage(
+    strokeCanvas,
+    bounds.left,
+    bounds.top,
+    width,
+    height,
+    0,
+    0,
+    width,
+    height
+  );
+
+  const scaleX = canvas.width / sourceImg.width;
+  const scaleY = canvas.height / sourceImg.height;
+  const dataUrl = cropCanvas.toDataURL("image/png");
+  return new Promise(resolve => {
+    fabric.Image.fromURL(dataUrl, (imgObj) => {
+      configureMosaicObject(imgObj).set({
+        left: bounds.left * scaleX,
+        top: bounds.top * scaleY,
+        scaleX,
+        scaleY,
+      });
+      resolve(imgObj);
+    });
+  });
+}
+
+function setupMosaicDrawing(canvas, state, sourceImg, history) {
+  let lastPoint, mosaicSource, strokeCanvas, strokeCtx, strokePreview, strokeBounds, strokePainted;
+
+  const refreshPreview = () => {
+    if (!strokePreview) return;
+    strokePreview.dirty = true;
+    canvas.requestRenderAll();
+  };
+
+  canvas.on("mouse:down", (opt) => {
+    if (state.tool !== "mosaic") return;
+    const ptr = clampPointer(canvas, canvas.getPointer(opt.e));
+    lastPoint = ptr;
+    state.drawing = true;
+    strokePainted = false;
+    strokeBounds = {};
+    mosaicSource = createMosaicSource(sourceImg, canvas, state.mosaicSize);
+
+    strokeCanvas = document.createElement("canvas");
+    strokeCanvas.width = sourceImg.width;
+    strokeCanvas.height = sourceImg.height;
+    strokeCtx = strokeCanvas.getContext("2d");
+    strokeCtx.imageSmoothingEnabled = false;
+
+    strokePreview = new fabric.Image(strokeCanvas, {
+      left: 0,
+      top: 0,
+      scaleX: canvas.width / sourceImg.width,
+      scaleY: canvas.height / sourceImg.height,
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+      objectCaching: false,
+    });
+
+    history.locked = true;
+    canvas.add(strokePreview);
+    history.locked = false;
+
+    strokePainted = paintMosaicStamp(sourceImg, canvas, mosaicSource, strokeCtx, strokeBounds, {
+      x: ptr.x,
+      y: ptr.y,
+      size: state.mosaicSize,
+    }) || strokePainted;
+    refreshPreview();
+  });
+
+  canvas.on("mouse:move", (opt) => {
+    if (state.tool !== "mosaic" || !state.drawing || !strokeCtx || !lastPoint) return;
+    const ptr = clampPointer(canvas, canvas.getPointer(opt.e));
+    strokePainted = paintMosaicLine(
+      sourceImg,
+      canvas,
+      mosaicSource,
+      strokeCtx,
+      strokeBounds,
+      lastPoint,
+      ptr,
+      state.mosaicSize
+    ) || strokePainted;
+    lastPoint = ptr;
+    refreshPreview();
+  });
+
+  canvas.on("mouse:up", async () => {
+    if (!state.drawing || !strokePreview) return;
+
+    history.locked = true;
+    canvas.remove(strokePreview);
+    history.locked = false;
+    state.drawing = false;
+    lastPoint = null;
+
+    if (!strokePainted) {
+      strokeCanvas = null;
+      strokeCtx = null;
+      strokePreview = null;
+      mosaicSource = null;
+      canvas.renderAll();
+      return;
+    }
+
+    const mosaicObj = await createMosaicStrokeObject(strokeCanvas, strokeBounds, canvas, sourceImg);
+    mosaicSource = null;
+    strokeCanvas = null;
+    strokeCtx = null;
+    strokePreview = null;
+
+    if (mosaicObj) {
+      canvas.add(mosaicObj);
+      canvas.discardActiveObject();
+    }
+    canvas.renderAll();
   });
 }
 
@@ -192,7 +487,7 @@ async function openPaintModal(node) {
   const cw = Math.round(img.width * scale);
   const ch = Math.round(img.height * scale);
 
-  const state = { tool: "brush", color: "#ff0000", width: 4, drawing: false };
+  const state = { tool: "brush", color: "#ff0000", width: 4, mosaicSize: 14, drawing: false };
 
   const toolbar = buildToolbar(state);
   overlay.appendChild(toolbar);
@@ -222,6 +517,7 @@ async function openPaintModal(node) {
   if (savedState) {
     await new Promise(resolve => {
       canvas.loadFromJSON(savedState, () => {
+        normalizeMosaicObjects(canvas);
         // Re-apply background since loadFromJSON may clear it
         canvas.setBackgroundImage(bgUrl, () => { canvas.renderAll(); resolve(); }, {
           scaleX: cw / img.width, scaleY: ch / img.height, crossOrigin: "anonymous"
@@ -238,6 +534,7 @@ async function openPaintModal(node) {
 
   // Shape drawing
   setupShapeDrawing(canvas, state);
+  setupMosaicDrawing(canvas, state, img, history);
   wireToolbar(toolbar, canvas, state, history);
 
   // Actions buttons
@@ -265,7 +562,7 @@ async function openPaintModal(node) {
   // Confirm - save painted image and store canvas state for re-editing
   actions.querySelector(".pb-confirm").onclick = async () => {
     // Save canvas objects (without background) for future re-editing
-    node.properties.paintBrushCanvas = canvas.toJSON();
+    node.properties.paintBrushCanvas = canvas.toJSON(PB_EXPORT_PROPS);
     node.graph?.change?.();
     await savePaintedImage(canvas, node, img.width, img.height);
     close();
@@ -326,12 +623,15 @@ function buildToolbar(state) {
     <button data-tool="rect">矩形</button>
     <button data-tool="circle">圆形</button>
     <button data-tool="line">直线</button>
+    <button data-tool="mosaic">马赛克</button>
     <button data-tool="eraser">橡皮擦</button>
     <span class="pb-sep"></span>
     <span class="pb-label">颜色</span>
     <input type="color" class="pb-color" value="${state.color}">
     <span class="pb-label">线宽</span>
     <input type="range" class="pb-width" min="1" max="40" value="${state.width}">
+    <span class="pb-label">块大小</span>
+    <input type="range" class="pb-mosaic-size" min="4" max="80" value="${state.mosaicSize}">
     <span class="pb-sep"></span>
     <button data-action="undo">撤回</button>
     <button data-action="clear">清空</button>
@@ -351,6 +651,8 @@ function wireToolbar(toolbar, canvas, state, history) {
       if (state.tool === "brush") {
         canvas.isDrawingMode = true;
         canvas.selection = false;
+        canvas.defaultCursor = "default";
+        canvas.hoverCursor = "move";
         canvas.freeDrawingBrush.color = state.color;
         canvas.freeDrawingBrush.width = state.width;
       } else if (state.tool === "eraser") {
@@ -359,6 +661,11 @@ function wireToolbar(toolbar, canvas, state, history) {
         canvas.selection = true;
         canvas.defaultCursor = "crosshair";
         canvas.hoverCursor = "pointer";
+      } else if (state.tool === "mosaic") {
+        canvas.isDrawingMode = false;
+        canvas.selection = false;
+        canvas.discardActiveObject();
+        applyMosaicCursor(canvas, state);
       } else {
         canvas.isDrawingMode = false;
         canvas.selection = false;
@@ -393,6 +700,13 @@ function wireToolbar(toolbar, canvas, state, history) {
     state.width = parseInt(e.target.value);
     if (canvas.isDrawingMode) {
       canvas.freeDrawingBrush.width = state.width;
+    }
+  };
+
+  toolbar.querySelector(".pb-mosaic-size").oninput = (e) => {
+    state.mosaicSize = parseInt(e.target.value);
+    if (state.tool === "mosaic") {
+      applyMosaicCursor(canvas, state);
     }
   };
 

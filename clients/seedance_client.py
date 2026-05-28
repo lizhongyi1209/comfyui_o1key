@@ -12,6 +12,16 @@ import aiohttp
 
 from ..utils.config import get_api_key_or_raise
 from ..utils.http_error import async_request_with_retry
+from ..utils.video_task import (
+    check_interrupt,
+    extract_error_message,
+    extract_progress,
+    extract_status,
+    interruptible_sleep,
+    is_failure_status,
+    is_success_status,
+    run_with_interrupt,
+)
 
 
 class SeedanceClient:
@@ -48,9 +58,11 @@ class SeedanceClient:
     ) -> str:
         """提交视频生成任务，返回 task_id"""
         url = f"{self.base_url}{self.CREATE_ENDPOINT}"
-        resp = await async_request_with_retry(
+        check_interrupt()
+        resp = await run_with_interrupt(async_request_with_retry(
             session, "POST", url, json=body, headers=self._headers(), prefix="Seedance 提交: "
-        )
+        ))
+        check_interrupt()
         text = await resp.text()
         data = json.loads(text)
 
@@ -73,6 +85,7 @@ class SeedanceClient:
         interval = self.POLL_INITIAL_INTERVAL
 
         while True:
+            check_interrupt()
             async with session.get(url, headers=self._headers()) as resp:
                 text = await resp.text()
                 if resp.status != 200:
@@ -89,20 +102,16 @@ class SeedanceClient:
             # new-api 包装格式：真实数据在 result["data"] 里
             inner = result.get("data") or result
 
-            status = (inner.get("status") or "").lower()
+            status = extract_status(result)
 
             # 解析进度
-            progress_raw = inner.get("progress", "0")
-            try:
-                progress_pct = int(str(progress_raw).rstrip("%").strip())
-            except (ValueError, AttributeError):
-                progress_pct = 0
+            progress_pct = extract_progress(result)
 
             print(f"[Seedance] 生成中 {progress_pct}%")
             if on_progress:
                 on_progress(progress_pct)
 
-            if status in self.SUCCESS_STATUSES:
+            if is_success_status(status):
                 # 响应结构：result["data"] = inner，inner["data"] = platform_data
                 # 视频 URL 在 inner["result_url"] 或 inner["data"]["content"]["video_url"]
                 platform_data = inner.get("data") or {}
@@ -123,15 +132,11 @@ class SeedanceClient:
                 )
                 return video_url, last_frame_url
 
-            if status in self.FAILURE_STATUSES:
-                reason = (
-                    inner.get("fail_reason")
-                    or (inner.get("error") or {}).get("message")
-                    or "未知错误"
-                )
+            if is_failure_status(status, result):
+                reason = extract_error_message(result)
                 raise RuntimeError(f"视频生成失败：{reason}")
 
-            await asyncio.sleep(interval)
+            await interruptible_sleep(interval)
             interval = min(interval * 1.5, self.POLL_MAX_INTERVAL)
 
     # ── 3. 下载视频 ────────────────────────────────────────────────────
@@ -144,12 +149,14 @@ class SeedanceClient:
     ) -> str:
         """下载视频到本地，返回本地路径"""
         print(f"[Seedance] 下载视频...")
+        check_interrupt()
         async with session.get(video_url, allow_redirects=True) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"视频下载失败 ({resp.status})")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with open(save_path, "wb") as f:
                 async for chunk in resp.content.iter_chunked(8192):
+                    check_interrupt()
                     f.write(chunk)
         return save_path
 
@@ -167,6 +174,7 @@ class SeedanceClient:
         async with aiohttp.ClientSession(connector=connector) as session:
 
             # 提交
+            check_interrupt()
             if on_stage:
                 on_stage("submitting")
             task_id = await self.submit_async(body, session)
