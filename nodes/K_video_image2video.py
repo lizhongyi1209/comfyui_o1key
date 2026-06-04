@@ -82,6 +82,9 @@ class KVideoImage2Video:
     CATEGORY = "comfyui_o1key/KVideo"
 
     async def generate(self, 起始帧, 提示词, 模式, 时长, 生成音频="关闭", 网络线路="全球加速", seed=0):
+        if 模式 == "720p" and 生成音频 == "打开":
+            raise RuntimeError("K26 仅1080p支持音频，请将模式切换为1080p或关闭生成音频。")
+
         api_key  = get_api_key_or_raise()
         base_url = get_base_url_by_route(网络线路)
         headers  = {
@@ -109,7 +112,7 @@ class KVideoImage2Video:
                 "duration": 时长,
             }
             if 生成音频 == "打开":
-                body["generate_audio"] = True
+                body["metadata"] = {"sound": "on"}
 
             body_str  = json.dumps(body, ensure_ascii=False)
             body_size = len(body_str.encode("utf-8"))

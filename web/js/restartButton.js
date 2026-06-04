@@ -43,6 +43,7 @@ app.registerExtension({
                 if (!confirm("确定要重启 ComfyUI 吗？")) return;
                 btn.style.opacity = "0.5";
                 btn.style.pointerEvents = "none";
+                await disableExperimentalAssetApi();
                 try { await fetch("/o1key/restart", { method: "POST" }); } catch {}
                 pollUntilReady();
             });
@@ -51,16 +52,70 @@ app.registerExtension({
             injected = true;
         }
 
+        async function disableExperimentalAssetApi() {
+            if (!(await shouldDisableExperimentalAssetApi())) return;
+            try {
+                await fetch("/api/settings/Comfy.Assets.UseAssetAPI", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(false),
+                    signal: AbortSignal.timeout(2000),
+                });
+            } catch {}
+        }
+
+        async function shouldDisableExperimentalAssetApi() {
+            try {
+                const r = await fetch("/api/settings/Comfy.Assets.UseAssetAPI", {
+                    cache: "no-store",
+                    signal: AbortSignal.timeout(2000),
+                });
+                if (!r.ok || !(await r.json())) return false;
+            } catch {
+                return false;
+            }
+            return !(await fetchOk("/api/assets/seed/status", 2000));
+        }
+
+        async function fetchOk(url, timeout = 2500) {
+            try {
+                const r = await fetch(url, {
+                    cache: "no-store",
+                    signal: AbortSignal.timeout(timeout),
+                });
+                return r.ok;
+            } catch {
+                return false;
+            }
+        }
+
+        async function comfyReady() {
+            const [statsOk, modelFoldersOk] = await Promise.all([
+                fetchOk("/api/system_stats"),
+                fetchOk("/api/experiment/models"),
+            ]);
+            return statsOk && modelFoldersOk;
+        }
+
         function pollUntilReady() {
             let attempts = 0;
-            const maxAttempts = 40;
+            const maxAttempts = 80;
+            const minRestartWaitMs = 5000;
+            const startedAt = Date.now();
+            let sawUnavailable = false;
             const interval = setInterval(async () => {
                 attempts++;
                 if (attempts > maxAttempts) { clearInterval(interval); forceReload(); return; }
-                try {
-                    const r = await fetch("/api/system_stats", { signal: AbortSignal.timeout(2000) });
-                    if (r.ok) { clearInterval(interval); forceReload(); }
-                } catch {}
+                const ready = await comfyReady();
+                if (!ready) {
+                    sawUnavailable = true;
+                    return;
+                }
+                if (!sawUnavailable && Date.now() - startedAt < minRestartWaitMs) return;
+
+                clearInterval(interval);
+                await disableExperimentalAssetApi();
+                setTimeout(forceReload, 800);
             }, 1500);
         }
 

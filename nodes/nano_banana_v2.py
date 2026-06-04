@@ -31,7 +31,7 @@ from PIL import Image
 from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts
 from ..utils.file_utils import load_images_from_folder, pair_images_by_name, pair_images_cartesian
 from ..utils.config import get_api_key_or_raise, NETWORK_ROUTE_OPTIONS, get_base_url_by_route
-from ..utils.http_error import async_request_with_retry
+from ..utils.http_error import async_request_with_retry, extract_structured_error_message, get_friendly_message
 from ..models_config import (
     get_enabled_async_models,
     get_model_provider,
@@ -241,6 +241,10 @@ class NanoBananaV2:
     @staticmethod
     def _friendly_error(error_msg: str) -> str:
         """将上游错误转化为用户友好的提示"""
+        structured_message = extract_structured_error_message(error_msg)
+        if structured_message and structured_message != error_msg:
+            error_msg = structured_message
+
         if "No available channel for model" in error_msg:
             return (
                 "当前分组下模型不可用，请检查分组是否正确。"
@@ -343,16 +347,16 @@ class NanoBananaV2:
                     error_text = await response.text()
                     if not error_text.strip():
                         error_text = "(服务器未返回错误详情)"
-                    raise RuntimeError(f"查询任务失败 ({response.status}): {error_text}")
+                    raise RuntimeError(f"查询任务失败: {get_friendly_message(response.status, error_text)}")
 
                 result = await response.json()
                 status = provider.extract_status(result)
 
-                # 提取进度并回调（封顶 1.0 防止异常值导致进度条溢出）
-                if on_progress and status in ("SUBMITTED", "IN_PROGRESS"):
+                # 提取进度并回调；运行中状态不显示 100%，只有 SUCCESS 才补满。
+                if on_progress and status in ("SUBMITTED", "QUEUED", "IN_PROGRESS"):
                     p = provider.extract_progress(result)
                     if p is not None:
-                        p = min(p, 1.0)
+                        p = min(p, 0.99)
                         if p > last_progress:
                             on_progress(p - last_progress)
                             last_progress = p
@@ -374,7 +378,7 @@ class NanoBananaV2:
                         print(f"{self.NODE_LABEL}: [轮询] FAILURE 但无错误信息，原始响应: {json.dumps(result, ensure_ascii=False)[:500]}")
                     friendly_msg = self._friendly_error(error_msg)
                     raise RuntimeError(f"任务失败: {friendly_msg}")
-                elif status in ("SUBMITTED", "IN_PROGRESS"):
+                elif status in ("SUBMITTED", "QUEUED", "IN_PROGRESS"):
                     # 分段 sleep，每 0.1 秒检查一次取消信号
                     sleep_iterations = int(_POLL_INTERVAL / _INTERRUPT_CHECK_INTERVAL)
                     for _ in range(sleep_iterations):
@@ -406,10 +410,7 @@ class NanoBananaV2:
             "error": None,
         }
 
-        contributed = [0.0]  # mutable container，追踪本任务已贡献的 pbar 进度
-
         def _track_progress(delta):
-            contributed[0] += delta
             if on_progress:
                 on_progress(delta)
 
@@ -435,15 +436,9 @@ class NanoBananaV2:
             result["request_time"] = request_time
             result["download_time"] = download_time
         except InterruptProcessingException:
-            # 用户取消：补齐进度后向上传播，不吞掉
-            if contributed[0] < 1.0 and on_progress:
-                on_progress(1.0 - contributed[0])
             raise
         except Exception as e:
             result["error"] = str(e) or f"{type(e).__name__}(无错误详情)"
-            # 失败也补齐 1.0 进度，保证进度条总数正确
-            if contributed[0] < 1.0 and on_progress:
-                on_progress(1.0 - contributed[0])
 
         return result
 
@@ -704,7 +699,7 @@ class NanoBananaV2:
             raise RuntimeError(str(e)) from None
 
         except Exception as e:
-            raise type(e)(str(e)) from None
+            raise RuntimeError(str(e)) from None
 
         finally:
             # 查询并打印余额
@@ -1223,7 +1218,7 @@ class NanoBananaV2Batch(NanoBananaV2):
             raise RuntimeError(str(e)) from None
 
         except Exception as e:
-            raise type(e)(str(e)) from None
+            raise RuntimeError(str(e)) from None
 
         finally:
             try:

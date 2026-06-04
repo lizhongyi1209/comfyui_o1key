@@ -4,7 +4,9 @@ Seedance 视频生成节点
   - Seedance: 文生视频 / 图生视频 / 首尾帧生视频（根据图片输入自动切换模式）
 """
 
+import base64
 import io
+import json
 import os
 import tempfile
 
@@ -13,7 +15,7 @@ import torch
 
 from ..clients.seedance_client import SeedanceClient
 from ..clients.gemini_client import GeminiAPIClient
-from ..utils.image_utils import tensor_to_pil, encode_image_to_base64, pil_to_tensor
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor
 from ..utils.r2_uploader import upload_video, upload_audio
 from ..utils.config import NETWORK_ROUTE_OPTIONS, get_base_url_by_route
 
@@ -28,6 +30,9 @@ _MODELS = [
 
 _RESOLUTIONS = ["720p", "1080p", "480p"]
 
+_MAX_IMAGE_BYTES = 30 * 1024 * 1024
+_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+
 
 # ── 模型能力判断 ──────────────────────────────────────────────────────────────
 
@@ -38,11 +43,43 @@ def _supports_camera_fixed(model: str) -> bool:
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
-def _tensor_to_base64_url(tensor) -> str:
+def _format_mb(size_bytes: int) -> str:
+    return f"{size_bytes / 1024 / 1024:.2f}MB"
+
+
+def _tensor_to_base64_url(tensor, label: str = "图片") -> str:
     """ComfyUI IMAGE tensor → data:image/png;base64,xxx"""
     pil_images = tensor_to_pil(tensor)
-    b64 = encode_image_to_base64(pil_images[0], format="PNG")
+    image = pil_images[0]
+    if image.mode == "RGBA":
+        image = image.convert("RGB")
+
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    image_bytes = buffered.getvalue()
+    image_size = len(image_bytes)
+
+    if image_size > _MAX_IMAGE_BYTES:
+        raise ValueError(
+            f"Seedance {label}大小 {_format_mb(image_size)} 超过单张图片 "
+            f"{_format_mb(_MAX_IMAGE_BYTES)} 限制，请先压缩或缩小图片。"
+        )
+
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
+
+
+def _validate_request_body_size(body: dict, tag: str):
+    body_size = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+    if body_size > _MAX_REQUEST_BODY_BYTES:
+        raise ValueError(
+            f"{tag} 请求体大小 {_format_mb(body_size)} 超过 "
+            f"{_format_mb(_MAX_REQUEST_BODY_BYTES)} 限制，请减少参考图片数量或降低图片尺寸。"
+        )
+    print(
+        f"[{tag}] 请求体大小: {_format_mb(body_size)} "
+        f"(限制 {_format_mb(_MAX_REQUEST_BODY_BYTES)})"
+    )
 
 
 
@@ -201,7 +238,7 @@ class Seedance:
             }
 
         elif mode == "i2v":
-            first_url = _tensor_to_base64_url(first_image)
+            first_url = _tensor_to_base64_url(first_image, "首帧图片")
             metadata["content"] = [
                 {
                     "type":      "image_url",
@@ -218,8 +255,8 @@ class Seedance:
             }
 
         else:  # flipflop
-            first_url = _tensor_to_base64_url(first_image)
-            last_url  = _tensor_to_base64_url(last_image)
+            first_url = _tensor_to_base64_url(first_image, "首帧图片")
+            last_url  = _tensor_to_base64_url(last_image, "尾帧图片")
             metadata["content"] = [
                 {
                     "type":      "image_url",
@@ -239,6 +276,8 @@ class Seedance:
                 "images":   [first_url],
                 "metadata": metadata,
             }
+
+        _validate_request_body_size(body, tag)
 
         # 保存路径（临时文件，避免与下游保存节点重复落盘）
         _, save_path = tempfile.mkstemp(suffix=".mp4", prefix=f"{file_prefix}_")
@@ -315,6 +354,7 @@ class SeedanceMultiModal:
         web_search  = _first(kwargs.get("联网搜索"), "关闭") == "打开"
         return_last = _first(kwargs.get("返回末帧图片"), "关闭") == "打开"
         seed        = _first(kwargs.get("seed"), 0)
+        network_route = _first(kwargs.get("网络线路"), "全球加速")
 
         # 参考图片：INPUT_IS_LIST 时是 [tensor, tensor, ...] 列表，直接保留
         raw_images = kwargs.get("参考图片", None)
@@ -344,11 +384,11 @@ class SeedanceMultiModal:
             imgs = ref_images[:9]
             if len(ref_images) > 9:
                 print(f"[SeedanceMultiModal] 参考图片超过9张，仅取前9张（共{len(ref_images)}张）")
-            for img_tensor in imgs:
+            for idx, img_tensor in enumerate(imgs, start=1):
                 # 每个 tensor 可能是 [1,H,W,C] 或 [H,W,C]，统一确保有 batch 维
                 if img_tensor.dim() == 3:
                     img_tensor = img_tensor.unsqueeze(0)
-                url = _tensor_to_base64_url(img_tensor)
+                url = _tensor_to_base64_url(img_tensor, f"参考图片{idx}")
                 content.append({
                     "type":      "image_url",
                     "image_url": {"url": url},
@@ -414,11 +454,13 @@ class SeedanceMultiModal:
         if first_image_url:
             body["image"] = first_image_url
 
+        _validate_request_body_size(body, "Seedance多模态")
+
         # ── 保存路径（临时文件，避免与下游保存节点重复落盘）──────────────────
         _, save_path = tempfile.mkstemp(suffix=".mp4", prefix="seedance_mm_")
 
         client            = SeedanceClient()
-        client.base_url   = get_base_url_by_route(kwargs.get("网络线路", "全球加速"))
+        client.base_url   = get_base_url_by_route(network_route)
         pbar              = _make_pbar()
         on_stage, on_prog = _make_callbacks("Seedance多模态", pbar)
 

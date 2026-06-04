@@ -4,10 +4,16 @@ app.registerExtension({
     name: "o1key.hideSidebarItems",
     async setup() {
         const hide = () => {
-            // 隐藏侧边栏的"说明"、"应用"、"模型"、"节点"按钮
-            const hiddenLabels = ["说明", "帮助", "Help", "应用", "Apps", "模型", "Models", "节点", "Nodes"];
+            // 隐藏侧边栏的"说明"、"应用"、"模型"、"节点"、"模板"按钮
+            const hiddenLabels = ["说明", "帮助", "help", "应用", "apps", "模型", "models", "节点", "nodes", "模板", "templates", "template"];
             document.querySelectorAll(".side-bar-button, [class*='sidebar'] button, .p-togglebutton").forEach(btn => {
-                const label = btn.getAttribute("aria-label") || btn.textContent || "";
+                const label = [
+                    btn.getAttribute("aria-label"),
+                    btn.getAttribute("title"),
+                    btn.getAttribute("data-title"),
+                    btn.getAttribute("data-label"),
+                    btn.textContent,
+                ].filter(Boolean).join(" ").toLowerCase();
                 if (hiddenLabels.some(k => label.includes(k))) {
                     btn.style.display = "none";
                 }

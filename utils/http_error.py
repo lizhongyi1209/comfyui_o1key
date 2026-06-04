@@ -9,8 +9,9 @@
 """
 
 import asyncio
+import json
 import random
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 
@@ -45,15 +46,66 @@ DEFAULT_MAX_DELAY = 30.0      # 最大等待秒数
 DEFAULT_BACKOFF_FACTOR = 2.0  # 指数退避因子
 
 
+def _extract_message_from_payload(payload: Any) -> str:
+    if isinstance(payload, str):
+        text = payload.strip()
+        if not text:
+            return ""
+        if text.startswith("{") or text.startswith("["):
+            try:
+                return _extract_message_from_payload(json.loads(text))
+            except Exception:
+                return text
+        return text
+
+    if not isinstance(payload, dict):
+        return ""
+
+    error = payload.get("error")
+    if isinstance(error, dict):
+        for key in ("message", "msg", "detail", "reason"):
+            value = error.get(key)
+            if value:
+                return _extract_message_from_payload(value)
+    elif error:
+        return _extract_message_from_payload(error)
+
+    for key in ("message", "msg", "detail", "reason", "error_message"):
+        value = payload.get(key)
+        if value:
+            return _extract_message_from_payload(value)
+
+    for key in ("data", "result", "response", "output"):
+        value = payload.get(key)
+        nested = _extract_message_from_payload(value)
+        if nested:
+            return nested
+
+    return ""
+
+
+def extract_structured_error_message(raw_message: str) -> str:
+    if not isinstance(raw_message, str):
+        return ""
+    text = raw_message.strip()
+    if not (text.startswith("{") or text.startswith("[")):
+        return ""
+    return _extract_message_from_payload(text)
+
+
 def get_friendly_message(status_code: int, raw_message: str = "") -> str:
     """根据状态码/错误内容返回友好文案，未匹配则返回原始信息"""
     if status_code == 524:
         return "Gateway timed out while waiting for upstream image generation. Please retry, lower resolution/count, or switch network route."
     if raw_message:
-        raw_message_lower = raw_message.lower()
+        structured_message = extract_structured_error_message(raw_message)
+        message_for_matching = structured_message or raw_message
+        raw_message_lower = message_for_matching.lower()
         for keyword, friendly_msg in ERROR_CONTENT_MESSAGES.items():
             if keyword.lower() in raw_message_lower:
                 return friendly_msg
+        if structured_message:
+            return structured_message
     if status_code == 500:
         return "服务器返回 500：上游生成失败或服务端临时异常。请稍后重试；如果多次出现，请降低分辨率/数量，或调整提示词。"
     friendly = HTTP_ERROR_MESSAGES.get(status_code)

@@ -4,23 +4,21 @@ ComfyUI 自定义节点，用于批量处理图像生成任务
 支持多文件夹加载、1:1/笛卡尔积配对、智能命名保存
 """
 
-import io as _io
-import re
-import json
 import time
 import math
-import base64
 import random
 import asyncio
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List
 from PIL import Image
 
 import torch
 import numpy as np
 
-from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts, encode_images_for_request_body_limit
+from comfy_api.latest import io
+
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts
 from ..utils.file_utils import (
     ImageInfo,
     load_images_from_folder,
@@ -30,7 +28,7 @@ from ..utils.file_utils import (
     save_image,
 )
 from ..utils.config import NETWORK_ROUTE_OPTIONS, get_base_url_by_route, get_api_key_or_raise
-from ..utils.http_error import RETRYABLE_STATUS_CODES, HTTP_ERROR_MESSAGES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR
+from ..utils.nano_banana_async import generate_nano_banana_async
 from ..clients.gemini_client import GeminiAPIClient
 from ..models_config import (
     get_model_supported_aspect_ratios, get_all_supported_aspect_ratios,
@@ -73,64 +71,28 @@ REQUEST_LOG_ENABLED = False
 # ============================================================================
 
 _NODE = "Nano Banana"
-_ENDPOINT = "/v1/chat/completions"
-
-_IMAGE_RE = re.compile(r"!\[.*?\]\(data:image/(\w+);base64,([A-Za-z0-9+/=]+)\)")
 
 
-def _get_headers(api_key: str) -> dict:
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "X-Accel-Buffering": "no",
-        "Cache-Control": "no-cache, no-transform",
-    }
+def _make_progress_callback(pbar) -> Optional[Callable[[float], None]]:
+    if pbar is None:
+        return None
+
+    last_progress = [0.0]
+
+    def _on_progress(progress: float) -> None:
+        try:
+            progress = max(0.0, min(float(progress), 1.0))
+        except (TypeError, ValueError):
+            return
+        if progress <= last_progress[0]:
+            return
+        pbar.update(progress - last_progress[0])
+        last_progress[0] = progress
+
+    return _on_progress
 
 
-def _build_request_body(
-    prompt: str,
-    model: str,
-    aspect_ratio: str,
-    resolution: str,
-    images: Optional[List[Image.Image]] = None,
-    enable_grounding: bool = False,
-) -> dict:
-    google_config = {
-        "image_config": {
-            "image_size": resolution,
-        }
-    }
-    if aspect_ratio and aspect_ratio != "智能":
-        google_config["image_config"]["aspect_ratio"] = aspect_ratio
-
-    def _make_body(encoded_images: Optional[List[tuple]] = None) -> dict:
-        content_parts = [{"type": "text", "text": prompt}]
-        if encoded_images:
-            for mime_type, b64 in encoded_images:
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{b64}"}
-                })
-
-        body = {
-            "model": model,
-            "stream": True,
-            "messages": [{"role": "user", "content": content_parts}],
-            "extra_body": {"google": google_config},
-        }
-
-        if enable_grounding:
-            body["extra_body"]["google_search"] = True
-        return body
-
-    encoded_images = None
-    if images:
-        encoded_images = encode_images_for_request_body_limit(images, _make_body)
-
-    return _make_body(encoded_images)
-
-
-async def _generate_single_openai(
+async def _generate_single_async(
     session: aiohttp.ClientSession,
     base_url: str,
     api_key: str,
@@ -140,82 +102,25 @@ async def _generate_single_openai(
     aspect_ratio: str,
     images: Optional[List[Image.Image]] = None,
     enable_grounding: bool = False,
+    progress_callback: Optional[Callable[[float], None]] = None,
+    thinking_level: Optional[str] = None,
 ) -> List[Image.Image]:
-    url = f"{base_url}{_ENDPOINT}"
-    headers = _get_headers(api_key)
-    body = _build_request_body(
+    result_images, _ = await generate_nano_banana_async(
+        session=session,
+        base_url=base_url,
+        api_key=api_key,
         prompt=prompt,
         model=model,
-        aspect_ratio=aspect_ratio,
         resolution=resolution,
+        aspect_ratio=aspect_ratio,
         images=images,
         enable_grounding=enable_grounding,
+        thinking_level=thinking_level,
+        node_label="BatchNanoBananaPro",
+        request_log_enabled=REQUEST_LOG_ENABLED,
+        progress_callback=progress_callback,
     )
-
-    if REQUEST_LOG_ENABLED:
-        extra = json.dumps(body.get("extra_body", {}), ensure_ascii=False)
-        print(f"[请求] POST {url} | model={model} | extra_body={extra}")
-
-    last_status = None
-    for attempt in range(DEFAULT_MAX_RETRIES + 1):
-        resp = await session.post(url, headers=headers, json=body)
-        if resp.status == 200:
-            break
-        last_status = resp.status
-        if resp.status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
-            friendly = HTTP_ERROR_MESSAGES.get(resp.status, f"请求失败 ({resp.status})")
-            delay = _compute_delay(attempt, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR)
-            resp.close()
-            await asyncio.sleep(delay)
-            continue
-        error_text = await resp.text()
-        resp.close()
-        if resp.status in HTTP_ERROR_MESSAGES:
-            raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
-        try:
-            err_json = json.loads(error_text)
-            msg = err_json.get("error", {}).get("message", error_text[:200])
-        except Exception:
-            msg = error_text[:200]
-        raise RuntimeError(f"API 错误 ({resp.status}): {msg}")
-    else:
-        if last_status and last_status in HTTP_ERROR_MESSAGES:
-            raise RuntimeError(HTTP_ERROR_MESSAGES[last_status])
-        raise RuntimeError(f"API 错误: 重试 {DEFAULT_MAX_RETRIES} 次后仍然失败")
-
-    full_content = ""
-    buffer = ""
-    async for raw_chunk in resp.content.iter_any():
-        buffer += raw_chunk.decode("utf-8")
-        while "\n" in buffer:
-            line_str, buffer = buffer.split("\n", 1)
-            line_str = line_str.strip()
-            if not line_str or not line_str.startswith("data:"):
-                continue
-            data_str = line_str[5:].strip()
-            if data_str == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data_str)
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                if "content" in delta:
-                    full_content += delta["content"]
-            except (json.JSONDecodeError, IndexError):
-                continue
-    resp.close()
-
-    if not full_content:
-        raise RuntimeError("API 未返回有效内容")
-
-    matches = list(_IMAGE_RE.finditer(full_content))
-    if not matches:
-        raise RuntimeError(f"响应中未找到图片: {full_content[:100]}")
-
-    last_match = matches[-1]
-    img_data = base64.b64decode(last_match.group(2))
-    final_image = Image.open(_io.BytesIO(img_data)).convert("RGB")
-
-    return [final_image]
+    return result_images
 
 
 def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.Tensor:
@@ -244,7 +149,7 @@ def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.
     return pil_to_tensor(matched)
 
 
-class BatchNanoBananaPro:
+class BatchNanoBananaPro(io.ComfyNode):
     """
     批量 Nano Banana 节点
     
@@ -290,6 +195,116 @@ class BatchNanoBananaPro:
 
     def __init__(self):
         pass
+
+    @classmethod
+    def define_schema(cls):
+        normal_aspect_ratios = [
+            "智能", "1:1", "2:3", "3:2", "3:4", "4:3",
+            "4:5", "5:4", "9:16", "16:9", "21:9",
+        ]
+        nano_banana_2_aspect_ratios = [
+            "智能", "1:1", "1:4", "1:8", "2:3", "3:2", "3:4",
+            "4:1", "4:3", "4:5", "5:4", "8:1",
+            "9:16", "16:9", "21:9",
+        ]
+
+        return io.Schema(
+            node_id="BatchNanoBananaPro",
+            display_name="批量 Nano Banana",
+            category="image/batch",
+            inputs=[
+                io.String.Input(
+                    "prompt",
+                    default="一个中国女子的OOTD",
+                    multiline=True,
+                ),
+                io.DynamicCombo.Input("模型", options=[
+                    io.DynamicCombo.Option("Nano Banana Pro", [
+                        io.Combo.Input("宽高比", options=normal_aspect_ratios, default="智能"),
+                        io.Combo.Input("分辨率", options=["1K", "2K", "4K"], default="2K"),
+                        io.Combo.Input("谷歌搜索", options=["关闭", "打开"], default="关闭"),
+                    ]),
+                    io.DynamicCombo.Option("Nano Banana 2", [
+                        io.Combo.Input("宽高比", options=nano_banana_2_aspect_ratios, default="智能"),
+                        io.Combo.Input("分辨率", options=["512px", "1K", "2K", "4K"], default="2K"),
+                        io.Combo.Input("谷歌搜索", options=["关闭", "打开"], default="关闭"),
+                        io.Combo.Input("思考深度", options=["高", "低"], default="高"),
+                    ]),
+                    io.DynamicCombo.Option("Nano Banana", [
+                        io.Combo.Input("宽高比", options=normal_aspect_ratios, default="智能"),
+                        io.Combo.Input("分辨率", options=["1K"], default="1K"),
+                        io.Combo.Input("谷歌搜索", options=["关闭", "打开"], default="关闭"),
+                    ]),
+                ]),
+                io.Combo.Input("图片格式", options=["原始", "JPEG", "PNG", "WebP"], default="原始"),
+                io.Combo.Input("计费", options=["特价", "官方"], default="特价"),
+                io.Combo.Input("网络", options=NETWORK_ROUTE_OPTIONS, default="全球加速"),
+                io.Int.Input("seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF),
+                io.String.Input("文件夹1", default="", multiline=False),
+                io.String.Input("文件夹2", default="", multiline=False),
+                io.String.Input("文件夹3", default="", multiline=False),
+                io.String.Input("文件夹4", default="", multiline=False),
+                io.String.Input("文件夹5", default="", multiline=False),
+                io.String.Input("保存路径", default="", multiline=False),
+                io.Combo.Input("图片配对模式", options=cls.PAIRING_MODES, default="不配对"),
+                io.Image.Input("参考图1", optional=True),
+                io.Image.Input("参考图2", optional=True),
+                io.Image.Input("参考图3", optional=True),
+                io.Image.Input("参考图4", optional=True),
+                io.Image.Input("参考图5", optional=True),
+            ],
+            outputs=[
+                io.Image.Output(display_name="输出图像"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        prompt,
+        模型,
+        图片格式,
+        计费,
+        网络,
+        seed,
+        文件夹1,
+        文件夹2,
+        文件夹3,
+        文件夹4,
+        文件夹5,
+        保存路径,
+        图片配对模式,
+        **kwargs,
+    ) -> io.NodeOutput:
+        model_name = 模型["模型"]
+        宽高比 = 模型.get("宽高比", "智能")
+        分辨率 = 模型.get("分辨率", "2K")
+        思考深度 = 模型.get("思考深度")
+        谷歌搜索 = 模型.get("谷歌搜索", "关闭")
+        if 思考深度:
+            kwargs["思考深度"] = 思考深度
+        kwargs["谷歌搜索"] = 谷歌搜索
+
+        node = cls()
+        output_tensor, = node.process_batch(
+            prompt=prompt,
+            文件夹1=文件夹1,
+            文件夹2=文件夹2,
+            文件夹3=文件夹3,
+            文件夹4=文件夹4,
+            文件夹5=文件夹5,
+            seed=seed,
+            图片配对模式=图片配对模式,
+            模型=model_name,
+            计费=计费,
+            宽高比=宽高比,
+            分辨率=分辨率,
+            图片格式=图片格式,
+            网络=网络,
+            保存路径=保存路径,
+            **kwargs,
+        )
+        return io.NodeOutput(output_tensor)
     
     def resize_to_megapixels(
         self,
@@ -352,7 +367,6 @@ class BatchNanoBananaPro:
         optional_inputs["图片配对模式"] = (cls.PAIRING_MODES, {
             "default": "不配对"
         })
-
         return {
             "required": {
                 "prompt": ("STRING", {
@@ -532,9 +546,11 @@ class BatchNanoBananaPro:
         enable_grounding: bool = False,
         base_filename: str = None,
         image_format: str = "原始",
+        progress_callback: Optional[Callable[[float], None]] = None,
+        thinking_level: Optional[str] = None,
     ) -> dict:
         """
-        执行单个生成任务（OpenAI 兼容接口）
+        执行单个生成任务（异步生图接口）
         """
         result = {
             "task_index": task_index,
@@ -550,10 +566,10 @@ class BatchNanoBananaPro:
             # 准备输入图片
             input_pil_images = [info.image for info in images]
 
-            # 调用 OpenAI 兼容接口生成图片
+            # 调用异步生图接口生成图片
             generated_images = []
             try:
-                gen_images = await _generate_single_openai(
+                gen_images = await _generate_single_async(
                     session=session,
                     base_url=base_url,
                     api_key=api_key,
@@ -563,6 +579,8 @@ class BatchNanoBananaPro:
                     aspect_ratio=aspect_ratio,
                     images=input_pil_images if input_pil_images else None,
                     enable_grounding=enable_grounding,
+                    progress_callback=progress_callback,
+                    thinking_level=thinking_level,
                 )
                 generated_images.extend(gen_images)
             except Exception as e:
@@ -661,9 +679,10 @@ class BatchNanoBananaPro:
         prompts_per_task: Optional[List[str]] = None,
         enable_grounding: bool = False,
         image_format: str = "原始",
+        thinking_level: Optional[str] = None,
     ) -> List[dict]:
         """
-        异步批量处理所有任务（OpenAI 兼容接口）
+        异步批量处理所有任务（异步生图接口）
         """
         total_tasks = len(pairs)
         
@@ -734,6 +753,8 @@ class BatchNanoBananaPro:
                             enable_grounding=enable_grounding,
                             base_filename=base_filename,
                             image_format=image_format,
+                            progress_callback=_make_progress_callback(pbar),
+                            thinking_level=thinking_level,
                         )
                     )
                     tasks.append(task)
@@ -773,13 +794,12 @@ class BatchNanoBananaPro:
                     else:
                         fail_count += 1
 
-                    # 更新 ComfyUI 原生进度条
-                    if pbar is not None:
-                        pbar.update(1)
-                    
                     # 大任务额外显示百分比里程碑
                     if show_milestone and milestone_index < len(milestones):
-                        progress = completed / total_tasks
+                        if pbar is not None and getattr(pbar, "total", 0):
+                            progress = pbar.current / pbar.total
+                        else:
+                            progress = success_count / total_tasks
                         if progress >= milestones[milestone_index]:
                             percentage = int(milestones[milestone_index] * 100)
                             print(f"BatchNanoBananaPro: >>> 进度 {percentage}% <<<")
@@ -856,10 +876,15 @@ class BatchNanoBananaPro:
         start_time = time.time()
         
         # 从 kwargs 提取搜索参数（界面显示为「关闭/打开」，转为 bool 供调用）
-        enable_grounding: bool = False
+        enable_grounding: bool = kwargs.get("谷歌搜索", "关闭") == "打开"
 
         # 拼接实际模型 ID
         base_model_id = self.MODEL_ID_MAP.get(模型, "nano-banana-pro")
+        思考深度 = kwargs.get("思考深度", "高")
+        thinking_level = None
+        if base_model_id == "nano-banana-2":
+            thinking_level = "High" if 思考深度 == "高" else "Low"
+
         if base_model_id == "nano-banana":
             if 计费 == "官方":
                 raise ValueError(f"模型 \"{模型}\" 仅支持特价计费")
@@ -961,11 +986,12 @@ class BatchNanoBananaPro:
             grounding_str = ""
             if enable_grounding:
                 grounding_str = " | 谷歌搜索接地"
+            thinking_str = f" | 思考:{thinking_level}" if thinking_level else ""
             
             if batch_prompts:
-                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 × {len(batch_prompts)}个提示词 | 共 {total_tasks} 任务{grounding_str}")
+                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 × {len(batch_prompts)}个提示词 | 共 {total_tasks} 任务{grounding_str}{thinking_str}")
             else:
-                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 | 共 {total_tasks} 任务{grounding_str}")
+                print(f"BatchNanoBananaPro: 批量任务 | {图片配对模式} 配对模式 | 共 {total_tasks} 任务{grounding_str}{thinking_str}")
             
             # 创建 ComfyUI 原生进度条
             pbar = None
@@ -1025,6 +1051,7 @@ class BatchNanoBananaPro:
                             prompts_per_task=prompts_per_task,
                             enable_grounding=enable_grounding,
                             image_format=图片格式,
+                            thinking_level=thinking_level,
                         )
                     )
                 except Exception as e:
@@ -1146,7 +1173,7 @@ class BatchNanoBananaPro:
             raise RuntimeError(str(e)) from None
 
         except Exception as e:
-            raise type(e)(str(e)) from None
+            raise RuntimeError(str(e)) from None
         
         finally:
             # 查询余额

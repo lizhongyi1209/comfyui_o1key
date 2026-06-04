@@ -1,7 +1,9 @@
 import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 const STORAGE_KEY = "o1key-notes";
 const SEEDED_KEY = "o1key-notes-seeded-v2";
+const NOTES_API = "/o1key/notes";
 const STYLE_ID = "o1key-notes-styles";
 
 let notes = [];
@@ -207,27 +209,91 @@ function injectStyles() {
     document.head.appendChild(el);
 }
 
-function loadNotes() {
+function readCachedNotes() {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        notes = raw ? JSON.parse(raw).map(makeNote) : [];
+        if (raw === null) return { found: false, notes: [] };
+        const parsed = JSON.parse(raw);
+        return { found: true, notes: Array.isArray(parsed) ? parsed.map(makeNote) : [] };
     } catch {
-        notes = [];
+        return { found: false, notes: [] };
+    }
+}
+
+function writeCachedNotes() {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
+    } catch {}
+}
+
+function hasSeededNotes() {
+    try {
+        return !!localStorage.getItem(SEEDED_KEY);
+    } catch {
+        return false;
+    }
+}
+
+function markSeededNotes() {
+    try {
+        localStorage.setItem(SEEDED_KEY, "1");
+    } catch {}
+}
+
+function createSeedNotes() {
+    return SAMPLE_NOTES.map(makeNote);
+}
+
+async function loadNotes() {
+    const cached = readCachedNotes();
+
+    try {
+        const resp = await api.fetchApi(NOTES_API);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        if (data.exists) {
+            notes = Array.isArray(data.notes) ? data.notes.map(makeNote) : [];
+            writeCachedNotes();
+            return;
+        }
+
+        notes = cached.found ? cached.notes : createSeedNotes();
+        markSeededNotes();
+        writeCachedNotes();
+        await persistNotesToFile();
+        return;
+    } catch (e) {
+        console.warn("[o1key notes] file storage unavailable, using localStorage", e);
     }
 
-    if (!localStorage.getItem(SEEDED_KEY)) {
-        const existingTitles = new Set(notes.map(n => n.title));
-        const samples = SAMPLE_NOTES.map(makeNote).filter(n => !existingTitles.has(n.title));
-        notes = [...samples, ...notes];
-        localStorage.setItem(SEEDED_KEY, "1");
-        saveNotes();
+    notes = cached.found ? cached.notes : [];
+    if (!cached.found && !hasSeededNotes()) {
+        notes = createSeedNotes();
+        markSeededNotes();
+        writeCachedNotes();
     }
 }
 
 function saveNotes() {
+    writeCachedNotes();
+    void persistNotesToFile();
+}
+
+async function persistNotesToFile() {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
-    } catch {}
+        const resp = await api.fetchApi(NOTES_API, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ notes }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return true;
+    } catch (e) {
+        console.warn("[o1key notes] failed to save notes file", e);
+        setPanelStatus("笔记文件保存失败，已保存在浏览器缓存");
+        return false;
+    }
 }
 
 function allTags() {
@@ -250,7 +316,7 @@ function filteredNotes() {
 app.registerExtension({
     name: "o1key.notePanel",
     async setup() {
-        loadNotes();
+        await loadNotes();
         app.extensionManager.registerSidebarTab({
             id: "o1key-notes",
             title: "笔记",

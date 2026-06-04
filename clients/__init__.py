@@ -9,6 +9,8 @@ from .gemini_flash_client import GeminiFlashClient
 from .sora_client import SoraClient
 from .kling_client import KlingClient
 from .veo_client import VeoClient
+from .newapi_veo_client import NewAPIVeoClient
+from .grok_video_client import GrokVideoClient
 from .openai_client import OpenAIAPIClient
 
-__all__ = ['BaseAPIClient', 'GeminiAPIClient', 'GeminiFlashClient', 'SoraClient', 'KlingClient', 'VeoClient', 'OpenAIAPIClient']
+__all__ = ['BaseAPIClient', 'GeminiAPIClient', 'GeminiFlashClient', 'SoraClient', 'KlingClient', 'VeoClient', 'NewAPIVeoClient', 'GrokVideoClient', 'OpenAIAPIClient']

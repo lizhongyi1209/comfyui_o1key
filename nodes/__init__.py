@@ -14,6 +14,7 @@ from .remove_metadata import BatchCleanMetadata
 from .video_preview import VideoPreview
 from .kling_video import KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset
 from .veo_video import GoogleVeo
+from .newapi_veo_video import Google31Video
 from .flux_edit import FluxImageEdit
 from .universal_llm import UniversalLLMChat
 from .batch_images_o1key import BatchImagesO1key
@@ -22,6 +23,7 @@ from .nano_banana_v2 import NanoBananaV2, NanoBananaV2Batch, AsyncImageGenerator
 from .doubao_image import DoubaoImage
 from .gpt_image import O1keyGPTImage, O1keyGPTImageBatch
 from .grok_image import O1keyGrokImage
+from .grok_video import O1keyGrokVideo
 from .K_video_firstlast import KVideoFirstLast
 from .K_video_image2video import KVideoImage2Video
 from .K3_video import K3Video
@@ -33,4 +35,4 @@ from .remove_bg import O1keyRemoveBackground
 from .color_remove_bg import O1keyColorRemoveBG
 from .grid_splitter import O1keyGridSplitter
 
-__all__ = ['NanoBananaV2', 'NanoBananaV2Batch', 'NanoBanana', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'FluxImageEdit', 'UniversalLLMChat', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'O1keyGPTImageBatch', 'O1keyGrokImage', 'KVideoFirstLast', 'KVideoImage2Video', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator', 'SaveImageFormat', 'O1keySavePSD', 'O1keyRemoveBackground', 'O1keyColorRemoveBG', 'O1keyGridSplitter']
+__all__ = ['NanoBananaV2', 'NanoBananaV2Batch', 'NanoBanana', 'BatchNanoBananaPro', 'GoogleGemini', 'LoadFile', 'ImageStitchPro', 'BatchCleanMetadata', 'VideoPreview', 'KlingVideo', 'KlingFirstLastFrame', 'KlingMotionControlTest', 'AspectRatioPreset', 'GoogleVeo', 'Google31Video', 'FluxImageEdit', 'UniversalLLMChat', 'BatchImagesO1key', 'Seedance', 'SeedanceMultiModal', 'StreamPreview', 'DoubaoImage', 'O1keyGPTImage', 'O1keyGPTImageBatch', 'O1keyGrokImage', 'O1keyGrokVideo', 'KVideoFirstLast', 'KVideoImage2Video', 'K3Video', 'K3VideoFirstLast', 'K3MotionControl', 'K3MotionVideoCheck', 'AsyncImageGenerator', 'BatchAsyncImageGenerator', 'SaveImageFormat', 'O1keySavePSD', 'O1keyRemoveBackground', 'O1keyColorRemoveBG', 'O1keyGridSplitter']

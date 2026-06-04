@@ -1,20 +1,16 @@
 """
 Nano Banana 节点 (V3)
-ComfyUI 自定义节点，用于调用生图模型（OpenAI 兼容接口）
+ComfyUI 自定义节点，用于调用异步生图模型
 使用 V3 DynamicCombo 实现模型-宽高比-分辨率动态联动
 """
 
-import io as _io
-import re
-import json
 import time
 import math
-import base64
 import random
 import asyncio
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import torch
 import numpy as np
@@ -22,20 +18,14 @@ from PIL import Image
 
 from comfy_api.latest import io
 
-from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts, encode_images_for_image_size_limit
+from ..utils.image_utils import tensor_to_pil, pil_to_tensor, parse_batch_prompts
 from ..utils.config import (
     NETWORK_ROUTE_OPTIONS,
     get_base_url_by_route,
     get_api_key_or_raise,
 )
-from ..utils.http_error import RETRYABLE_STATUS_CODES, HTTP_ERROR_MESSAGES, _compute_delay, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR
+from ..utils.nano_banana_async import generate_nano_banana_async
 from ..clients.gemini_client import GeminiAPIClient
-
-try:
-    import folder_paths
-    FOLDER_PATHS_AVAILABLE = True
-except ImportError:
-    FOLDER_PATHS_AVAILABLE = False
 
 try:
     from comfy.utils import ProgressBar
@@ -51,17 +41,9 @@ except ImportError:
     InterruptProcessingException = RuntimeError
     processing_interrupted = lambda: False
 
-try:
-    import psutil
-    MEMORY_MONITOR_AVAILABLE = True
-except ImportError:
-    MEMORY_MONITOR_AVAILABLE = False
-
-DEBUG_LOG_ENABLED = True
 REQUEST_LOG_ENABLED = False
 
 _NODE = "Nano Banana"
-_ENDPOINT = "/v1/chat/completions"
 _REQUEST_TIMEOUT = 900
 _INTERRUPT_CHECK_INTERVAL = 0.2
 
@@ -110,6 +92,25 @@ async def _run_with_interrupt(coro):
 def _check_interrupt():
     if INTERRUPT_AVAILABLE and processing_interrupted():
         raise InterruptProcessingException()
+
+
+def _make_progress_callback(pbar) -> Optional[Callable[[float], None]]:
+    if pbar is None:
+        return None
+
+    last_progress = [0.0]
+
+    def _on_progress(progress: float) -> None:
+        try:
+            progress = max(0.0, min(float(progress), 1.0))
+        except (TypeError, ValueError):
+            return
+        if progress <= last_progress[0]:
+            return
+        pbar.update(progress - last_progress[0])
+        last_progress[0] = progress
+
+    return _on_progress
 
 
 def _images_to_tensor_safe(images: List[Image.Image], node_label: str) -> torch.Tensor:
@@ -169,66 +170,6 @@ def _build_model_id(model_name: str, resolution: str, billing: str) -> str:
         model_id += "-official"
     return model_id
 
-_IMAGE_RE = re.compile(r"!\[.*?\]\(data:image/(\w+);base64,([A-Za-z0-9+/=]+)\)")
-
-
-def _get_headers(api_key: str) -> dict:
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "X-Accel-Buffering": "no",
-        "Cache-Control": "no-cache, no-transform",
-    }
-
-
-def _build_request_body(
-    prompt: str,
-    model: str,
-    aspect_ratio: str,
-    resolution: str,
-    images: Optional[List[Image.Image]] = None,
-    enable_grounding: bool = False,
-    thinking_level: Optional[str] = None,
-) -> dict:
-    google_config = {
-        "image_config": {
-            "image_size": resolution,
-        }
-    }
-    if aspect_ratio and aspect_ratio != "智能":
-        google_config["image_config"]["aspect_ratio"] = aspect_ratio
-    if thinking_level:
-        google_config["thinking_config"] = {
-            "thinking_level": thinking_level.lower(),
-            "include_thoughts": True,
-        }
-
-    def _make_body(encoded_images: Optional[List[tuple]] = None) -> dict:
-        content_parts = [{"type": "text", "text": prompt}]
-        if encoded_images:
-            for mime_type, b64 in encoded_images:
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{b64}"}
-                })
-
-        body = {
-            "model": model,
-            "stream": True,
-            "messages": [{"role": "user", "content": content_parts}],
-            "extra_body": {"google": google_config},
-        }
-
-        if enable_grounding:
-            body["extra_body"]["google_search"] = True
-        return body
-
-    encoded_images = None
-    if images:
-        encoded_images = encode_images_for_image_size_limit(images)
-
-    return _make_body(encoded_images)
-
 
 async def _generate_single(
     session: aiohttp.ClientSession,
@@ -241,105 +182,25 @@ async def _generate_single(
     images: Optional[List[Image.Image]] = None,
     enable_grounding: bool = False,
     thinking_level: Optional[str] = None,
+    progress_callback: Optional[Callable[[float], None]] = None,
 ) -> List[Image.Image]:
-    url = f"{base_url}{_ENDPOINT}"
-    headers = _get_headers(api_key)
-    body = _build_request_body(
+    result_images, timing = await generate_nano_banana_async(
+        session=session,
+        base_url=base_url,
+        api_key=api_key,
         prompt=prompt,
         model=model,
-        aspect_ratio=aspect_ratio,
         resolution=resolution,
+        aspect_ratio=aspect_ratio,
         images=images,
         enable_grounding=enable_grounding,
         thinking_level=thinking_level,
+        node_label="Nano Banana",
+        request_log_enabled=REQUEST_LOG_ENABLED,
+        check_interrupt=_check_interrupt,
+        progress_callback=progress_callback,
     )
-
-    if REQUEST_LOG_ENABLED:
-        extra = json.dumps(body.get("extra_body", {}), ensure_ascii=False)
-        print(f"[请求] POST {url} | model={model} | extra_body={extra}")
-
-    last_status = None
-    resp = None
-    timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT, connect=30, sock_read=_REQUEST_TIMEOUT)
-    for attempt in range(DEFAULT_MAX_RETRIES + 1):
-        _check_interrupt()
-        resp = await session.post(url, headers=headers, json=body, timeout=timeout)
-        if resp.status == 200:
-            break
-        last_status = resp.status
-        if resp.status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
-            friendly = HTTP_ERROR_MESSAGES.get(resp.status, f"请求失败 ({resp.status})")
-            delay = _compute_delay(attempt, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY, DEFAULT_BACKOFF_FACTOR)
-            print(f"Nano Banana: {friendly} {delay:.1f}s 后重试 ({attempt+1}/{DEFAULT_MAX_RETRIES})...")
-            resp.close()
-            await asyncio.sleep(delay)
-            continue
-        error_text = await resp.text()
-        resp.close()
-        if resp.status in HTTP_ERROR_MESSAGES:
-            raise RuntimeError(HTTP_ERROR_MESSAGES[resp.status])
-        try:
-            err_json = json.loads(error_text)
-            msg = err_json.get("error", {}).get("message", error_text[:200])
-        except Exception:
-            msg = error_text[:200]
-        raise RuntimeError(f"API 错误 ({resp.status}): {msg}")
-    else:
-        if last_status and last_status in HTTP_ERROR_MESSAGES:
-            raise RuntimeError(HTTP_ERROR_MESSAGES[last_status])
-        raise RuntimeError(f"API 错误: 重试 {DEFAULT_MAX_RETRIES} 次后仍然失败")
-
-    full_content = ""
-    buffer = ""
-    t_request = time.time()
-    t_first_token = None
-    try:
-        async for raw_chunk in resp.content.iter_any():
-            _check_interrupt()
-            if t_first_token is None:
-                t_first_token = time.time()
-            buffer += raw_chunk.decode("utf-8")
-            while "\n" in buffer:
-                line_str, buffer = buffer.split("\n", 1)
-                line_str = line_str.strip()
-                if not line_str or not line_str.startswith("data:"):
-                    continue
-                data_str = line_str[5:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    if "content" in delta:
-                        full_content += delta["content"]
-                except (json.JSONDecodeError, IndexError):
-                    continue
-    except aiohttp.ClientPayloadError as e:
-        if full_content and _IMAGE_RE.search(full_content):
-            print(f"Nano Banana: 响应流提前结束，但已收到完整图片，继续解析 ({e})")
-        else:
-            raise RuntimeError(f"响应流下载中断，请重试或检查网络/代理: {e}") from None
-    finally:
-        if resp is not None:
-            resp.close()
-    t_done = time.time()
-
-    if not full_content:
-        raise RuntimeError("API 未返回有效内容")
-
-    # 思考模型可能输出多张临时图片，最终图片始终是最后一张
-    matches = list(_IMAGE_RE.finditer(full_content))
-    if not matches:
-        raise RuntimeError(f"响应中未找到图片: {full_content[:100]}")
-
-    last_match = matches[-1]
-    img_data = base64.b64decode(last_match.group(2))
-    final_image = Image.open(_io.BytesIO(img_data)).convert("RGB")
-
-    first_token_ms = (t_first_token - t_request) * 1000 if t_first_token else 0
-    download_ms = (t_done - t_first_token) * 1000 if t_first_token else 0
-
-    return [final_image], first_token_ms, download_ms
+    return result_images, timing["task_ms"], timing["parse_ms"]
 
 
 async def _generate_single_task(
@@ -354,6 +215,7 @@ async def _generate_single_task(
     global_task_index: int,
     enable_grounding: bool = False,
     thinking_level: Optional[str] = None,
+    progress_callback: Optional[Callable[[float], None]] = None,
 ) -> dict:
     result = {
         "global_task_index": global_task_index,
@@ -364,7 +226,7 @@ async def _generate_single_task(
         "error": None,
     }
     try:
-        gen_images, first_token_ms, download_ms = await _generate_single(
+        gen_images, task_ms, parse_ms = await _generate_single(
             session=session,
             base_url=base_url,
             api_key=api_key,
@@ -375,7 +237,9 @@ async def _generate_single_task(
             images=images if images else None,
             enable_grounding=enable_grounding,
             thinking_level=thinking_level,
+            progress_callback=progress_callback,
         )
+        del task_ms, parse_ms
         result["output_images"] = gen_images
         result["success"] = True
         result["generated_count"] = len(gen_images)
@@ -438,6 +302,7 @@ async def _process_batch_async(
                         global_task_index=i,
                         enable_grounding=enable_grounding,
                         thinking_level=thinking_level,
+                        progress_callback=_make_progress_callback(pbar),
                     )
                 )
                 tasks.append(task)
@@ -472,9 +337,6 @@ async def _process_batch_async(
                     fail_count += 1
                     error_msg = result_data.get("error", "未知错误") if result_data else "未知错误"
                     print(f"Nano Banana: [{completed}/{total_tasks}] {prompt_snippet}{'...' if len(prompt_snippet) >= 30 else ''} → ✗失败: {error_msg}")
-
-                if pbar is not None:
-                    pbar.update(1)
 
             all_results.extend(batch_results)
             import gc; gc.collect()
@@ -576,7 +438,7 @@ class NanoBanana(io.ComfyNode):
                     pil_imgs = tensor_to_pil(kwargs[key])
                     input_images.extend(pil_imgs)
 
-            if input_images and len(input_images) > 14:
+            if len(input_images) > 14:
                 raise ValueError(f"输入图像数量 {len(input_images)} 超过限制 14 张")
 
             batch_prompts = parse_batch_prompts(prompt)
@@ -667,6 +529,7 @@ class NanoBanana(io.ComfyNode):
                                     images=input_images if input_images else None,
                                     enable_grounding=enable_grounding,
                                     thinking_level=thinking_level,
+                                    progress_callback=_make_progress_callback(pbar),
                                 )
                         return loop.run_until_complete(_run_with_interrupt(_do()))
                     finally:
@@ -674,17 +537,14 @@ class NanoBanana(io.ComfyNode):
 
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(run_single)
-                    generated_images, first_token_ms, download_ms = future.result(timeout=_REQUEST_TIMEOUT)
-
-                if pbar is not None:
-                    pbar.update(1)
+                    generated_images, task_ms, parse_ms = future.result(timeout=_REQUEST_TIMEOUT)
 
                 output_tensor = _images_to_tensor_safe(generated_images, _NODE)
                 elapsed = time.time() - start_time
                 time_str = f"{elapsed:.3f}s" if elapsed < 1 else f"{elapsed:.2f}s"
-                ft_str = f"{first_token_ms/1000:.2f}s"
-                dl_str = f"{download_ms/1000:.2f}s"
-                print(f"完成！总耗时 {time_str} | 首字 {ft_str} | 下载 {dl_str} | 成功 {len(generated_images)}张")
+                task_str = f"{task_ms/1000:.2f}s"
+                parse_str = f"{parse_ms/1000:.2f}s"
+                print(f"完成！总耗时 {time_str} | 异步任务 {task_str} | 解析 {parse_str} | 成功 {len(generated_images)}张")
 
                 import gc; gc.collect()
                 return io.NodeOutput(output_tensor)
@@ -701,7 +561,7 @@ class NanoBanana(io.ComfyNode):
         except RuntimeError as e:
             raise RuntimeError(str(e)) from None
         except Exception as e:
-            raise type(e)(str(e)) from None
+            raise RuntimeError(str(e)) from None
         finally:
             if not was_interrupted:
                 try:

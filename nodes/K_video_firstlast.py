@@ -110,10 +110,13 @@ class KVideoFirstLast:
                 "mode":     mode_api,
                 "duration": 时长,
             }
-            if 生成音频 == "打开":
-                body["generate_audio"] = True
+            metadata = {}
             if 尾帧 is not None:
-                body["metadata"] = {"image_tail": _image_to_base64(尾帧, scale)}
+                metadata["image_tail"] = _image_to_base64(尾帧, scale)
+            if 生成音频 == "打开":
+                metadata["sound"] = "on"
+            if metadata:
+                body["metadata"] = metadata
 
             body_str  = json.dumps(body, ensure_ascii=False)
             body_size = len(body_str.encode("utf-8"))

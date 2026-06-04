@@ -42,6 +42,56 @@ except ImportError:
     _FOLDER_PATHS_AVAILABLE = False
 
 
+def _make_node_progress_callback(progress_bar, task_index: int, total_tasks: int):
+    if progress_bar is None:
+        return None
+
+    total_units = max(1, total_tasks) * 100
+    base_units = max(0, task_index - 1) * 100
+    last_pct = {"value": -1}
+
+    def _callback(pct: int):
+        try:
+            pct_value = int(round(float(pct)))
+        except (TypeError, ValueError):
+            return
+        pct_value = max(0, min(100, pct_value))
+        if pct_value < last_pct["value"]:
+            return
+        last_pct["value"] = pct_value
+        progress_bar.update_absolute(
+            min(total_units, base_units + pct_value),
+            total_units,
+        )
+
+    return _callback
+
+
+def _resolve_async_size(value: str) -> str:
+    value = (value or "").strip()
+    if not value or value == "智能" or value.lower() == "auto":
+        return "auto"
+
+    first_part = value.split("（")[0].strip()
+    normalized_size = first_part.lower().replace("*", "x").replace("×", "x")
+    size_parts = [part.strip() for part in normalized_size.split("x")]
+    if len(size_parts) == 2 and all(part.isdigit() for part in size_parts):
+        return f"{int(size_parts[0])}x{int(size_parts[1])}"
+
+    allowed = {"auto", "1024x1024", "1K", "2K", "4K"}
+    if first_part in allowed:
+        return first_part
+
+    if "4K" in value:
+        return "4K"
+    if "2K" in value:
+        return "2K"
+    if "1K" in value:
+        return "1K"
+
+    return "auto"
+
+
 class O1keyGPTImage:
     """
     o1key GPT Image 节点
@@ -123,6 +173,10 @@ class O1keyGPTImage:
             "default": "自动",
             "tooltip": "Image quality: 高=high, 中=medium, 低=low, 自动=auto",
         })
+        optional_inputs["输出格式"] = (["png", "jpeg", "webp"], {
+            "default": "jpeg",
+            "tooltip": "Generated image output format",
+        })
         optional_inputs["seed"] = ("INT", {
             "default": 0,
             "min": 0,
@@ -160,6 +214,7 @@ class O1keyGPTImage:
         网络: str = "全球加速",
         分辨率: str = "auto",
         质量: str = "自动",
+        输出格式: str = "jpeg",
         生图数量: int = 1,
         seed: int = 0,
         遮罩=None,
@@ -190,7 +245,7 @@ class O1keyGPTImage:
             raise ValueError("提供了遮罩但未提供图片，请同时提供图片和遮罩")
 
         # ── 2. 解析分辨率显示值 → API 参数值 ──────────────────────────────────
-        size = "auto" if 分辨率 == "智能" else 分辨率.split("（")[0].strip()
+        size = _resolve_async_size(分辨率)
 
         # ── 2b. 解析模型显示值 → API 参数值 ───────────────────────────────────
         _model_map = {"gpt-image-2-次卡": "gpt-image-2-c", "gpt-image-2-按量": "gpt-image-2"}
@@ -216,6 +271,8 @@ class O1keyGPTImage:
 
             # ── 5. 调用 API ───────────────────────────────────────────────────
             all_pil_images = []
+            progress_total = len(batch_prompts) if batch_prompts else 1
+            progress_bar = ProgressBar(progress_total * 100) if _PROGRESS_BAR_AVAILABLE else None
 
             if batch_prompts:
                 # 批量模式：逐条提示词调用
@@ -226,7 +283,7 @@ class O1keyGPTImage:
                         print("[o1key GPT Image] 用户取消，已中断批量生成")
                         raise InterruptProcessingException()
                     try:
-                        pil_images = client.run_sync(
+                        pil_images = client.generate_image_async_sync(
                             prompt=p,
                             model=model,
                             quality=quality,
@@ -235,6 +292,8 @@ class O1keyGPTImage:
                             seed=seed,
                             image_tensor=图片,
                             mask_tensor=遮罩,
+                            output_format=输出格式,
+                            progress_callback=_make_node_progress_callback(progress_bar, idx, total),
                         )
                         all_pil_images.extend(pil_images)
                         snippet = p[:30] + ("..." if len(p) >= 30 else "")
@@ -245,12 +304,14 @@ class O1keyGPTImage:
                         error_msg = str(e).split('\n')[0]
                         snippet = p[:30] + ("..." if len(p) >= 30 else "")
                         print(f"[o1key GPT Image] [{idx}/{total}] ❌ {snippet} → {error_msg}")
+                    if progress_bar is not None:
+                        progress_bar.update_absolute(idx * 100, total * 100)
             else:
                 # 单提示词模式
                 if not prompt or not prompt.strip():
                     raise ValueError("提示词不能为空")
                 try:
-                    pil_images = client.run_sync(
+                    pil_images = client.generate_image_async_sync(
                         prompt=prompt,
                         model=model,
                         quality=quality,
@@ -259,6 +320,8 @@ class O1keyGPTImage:
                         seed=seed,
                         image_tensor=图片,
                         mask_tensor=遮罩,
+                        output_format=输出格式,
+                        progress_callback=_make_node_progress_callback(progress_bar, 1, 1),
                     )
                     all_pil_images.extend(pil_images)
                 except InterruptProcessingException:
@@ -495,7 +558,7 @@ class O1keyGPTImageBatch:
 
     @staticmethod
     def _resolve_size(分辨率: str) -> str:
-        return "auto" if 分辨率 == "智能" else 分辨率.split("（")[0].strip()
+        return _resolve_async_size(分辨率)
 
     @staticmethod
     def _resolve_model(模型: str) -> str:
@@ -509,6 +572,15 @@ class O1keyGPTImageBatch:
     def _resolve_quality(质量: str) -> str:
         quality_map = {"高": "high", "中": "medium", "低": "low", "自动": "auto"}
         return quality_map.get(质量, "auto")
+
+    @staticmethod
+    def _resolve_output_format(图片格式: str) -> str:
+        output_format_map = {
+            "JPEG": "jpeg",
+            "PNG": "png",
+            "WebP": "webp",
+        }
+        return output_format_map.get(图片格式, "png")
 
     @staticmethod
     def _ensure_output_folder(保存路径: str) -> str:
@@ -637,11 +709,12 @@ class O1keyGPTImageBatch:
             size = self._resolve_size(分辨率)
             model = self._resolve_model(模型)
             quality = self._resolve_quality(质量)
+            output_format = self._resolve_output_format(图片格式)
 
             client = GptImageClient()
             client.base_url = get_base_url_by_route(网络)
 
-            progress_bar = ProgressBar(total_tasks) if _PROGRESS_BAR_AVAILABLE else None
+            progress_bar = ProgressBar(total_tasks * 100) if _PROGRESS_BAR_AVAILABLE else None
             results = []
             all_saved_files = []
 
@@ -661,7 +734,7 @@ class O1keyGPTImageBatch:
                 }
 
                 try:
-                    pil_images = client.run_sync(
+                    pil_images = client.generate_image_async_sync(
                         prompt=task_prompt,
                         model=model,
                         quality=quality,
@@ -670,6 +743,8 @@ class O1keyGPTImageBatch:
                         seed=seed,
                         image_tensor=self._pair_to_tensors(pair),
                         mask_tensor=遮罩,
+                        output_format=output_format,
+                        progress_callback=_make_node_progress_callback(progress_bar, task_index, total_tasks),
                     )
                     saved_files = self._save_images(
                         images=pil_images,
@@ -691,7 +766,7 @@ class O1keyGPTImageBatch:
 
                 results.append(result)
                 if progress_bar is not None:
-                    progress_bar.update(1)
+                    progress_bar.update_absolute(task_index * 100, total_tasks * 100)
 
             success_count = sum(1 for result in results if result.get("success", False))
             total_generated = sum(result.get("generated_count", 0) for result in results)

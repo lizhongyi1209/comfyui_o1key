@@ -1,13 +1,17 @@
 """
 GPT Image API 客户端
-支持两个接口：
-  - POST /v1/images/generations/  文生图 / 图生图（gpt-image-1 / gpt-image-1.5）
-  - POST /v1/images/edits/        图像编辑（带蒙版 inpainting）
+新版节点请求走异步任务接口：
+  - POST /async/v1/generateImage
+  - GET  /async/v1/tasks/{task_id}
+
+旧同步接口保留兼容代码，但 GPT Image 节点不再使用：
+  - POST /v1/images/generations/
+  - POST /v1/images/edits
 
 设计原则：
-  - 与 doubao_image_client.py 保持相同的异步 + 同步双入口模式
-  - generations / edits 接口均使用 multipart/form-data
-  - 响应兼容 SSE 流式、JSON、url 和 b64_json
+  - 对 ComfyUI 节点暴露同步入口，内部提交异步任务并轮询
+  - 图片和蒙版以 data:image/png;base64,... 放入 JSON 请求体
+  - 响应优先读取 data.images[].url
 """
 
 import asyncio
@@ -16,7 +20,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import aiohttp
 import numpy as np
@@ -38,6 +42,8 @@ except ImportError:
 # ── 接口端点 ──────────────────────────────────────────────────────────────────
 _ENDPOINT_GENERATIONS = "/v1/images/generations/"
 _ENDPOINT_EDITS       = "/v1/images/edits"
+_ENDPOINT_ASYNC_GENERATE = "/async/v1/generateImage"
+_ENDPOINT_ASYNC_TASK = "/async/v1/tasks/{task_id}"
 
 # ── 模型名映射（UI 显示名 → API 实际参数名）─────────────────────────────────
 _MODEL_NAME_MAP = {
@@ -47,6 +53,49 @@ _MODEL_NAME_MAP = {
 
 # ── 超时 ──────────────────────────────────────────────────────────────────────
 _REQUEST_TIMEOUT = 900   # 秒
+_ASYNC_POLL_SCHEDULE = [5.0, 20.0]
+_ASYNC_POLL_INTERVAL = 3.0
+_ASYNC_MAX_WAIT = 600.0
+_ASYNC_RETRY_DELAYS = [2.0, 5.0, 10.0]
+_ASYNC_RETRYABLE_ERROR_CODES = {
+    "image_rate_limited",
+    "image_upstream_busy",
+    "image_timeout",
+    "image_storage_failed",
+    "image_empty_result",
+    "image_upstream_error",
+    "image_internal_error",
+    "image_unknown_error",
+}
+_ASYNC_RETRYABLE_ERROR_CATEGORIES = {
+    "rate_limit",
+    "upstream_busy",
+    "timeout",
+    "storage",
+    "upstream_error",
+    "internal_error",
+    "unknown",
+}
+_ASYNC_NON_RETRYABLE_ERROR_CODES = {
+    "image_invalid_size",
+    "image_payload_too_large",
+    "image_invalid_mask",
+    "image_invalid_parameter",
+    "image_safety_blocked",
+    "image_provider_quota_exceeded",
+    "image_provider_permission_required",
+    "image_model_unavailable",
+    "image_reference_download_failed",
+}
+
+REQUEST_LOG_ENABLED = False
+POLL_LOG_ENABLED = False
+
+
+class _AsyncImageTaskFailure(RuntimeError):
+    def __init__(self, message: str, error_detail: Optional[dict] = None):
+        super().__init__(message)
+        self.error_detail = error_detail or {}
 
 
 class GptImageClient:
@@ -54,10 +103,10 @@ class GptImageClient:
     GPT Image API 客户端
 
     接口说明：
-      generations：multipart/form-data，支持 quality / size / n / model
-      edits：multipart/form-data，图片和 mask 使用 PNG 文件上传
+      async generateImage：JSON 提交，返回 task_id
+      tasks/{task_id}：轮询任务状态，成功后读取 data.images[].url
 
-    响应支持 JSON 和 SSE 流式格式。
+    旧 generations / edits 同步接口保留为兼容代码。
     """
 
     def __init__(self):
@@ -131,6 +180,226 @@ class GptImageClient:
             f"（{w}×{h}）"
         )
         return png_bytes
+
+    @staticmethod
+    def _png_bytes_to_data_url(png_bytes: bytes) -> str:
+        b64 = base64.b64encode(png_bytes).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+
+    @staticmethod
+    def _json_body_size(body: dict) -> int:
+        return len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+    @staticmethod
+    def _format_body_size(size: int) -> str:
+        if size < 1024 * 1024:
+            return f"{size / 1024:.2f}KB"
+        return f"{size / 1024 / 1024:.2f}MB"
+
+    @staticmethod
+    def _shorten_data_urls_for_log(obj, max_len: int = 200):
+        if isinstance(obj, dict):
+            return {
+                key: GptImageClient._shorten_data_urls_for_log(value, max_len)
+                for key, value in obj.items()
+            }
+        if isinstance(obj, list):
+            return [GptImageClient._shorten_data_urls_for_log(item, max_len) for item in obj]
+        if isinstance(obj, str) and obj.startswith("data:image") and len(obj) > max_len:
+            header, _, data = obj.partition(",")
+            return f"{header},<base64 data, {len(data)} chars>"
+        return obj
+
+    def _log_original_request_body(self, label: str, body: dict) -> None:
+        if not REQUEST_LOG_ENABLED:
+            return
+        body_size = self._json_body_size(body)
+        print(
+            f"\n{'=' * 60}\n"
+            f"[o1key GPT Image] 原始请求体日志 | {label} | "
+            f"请求体积: {self._format_body_size(body_size)} "
+            f"(data URL 已折叠显示 base64 长度)\n"
+            f"{json.dumps(self._shorten_data_urls_for_log(body), ensure_ascii=False, indent=2)}\n"
+            f"{'=' * 60}\n"
+        )
+
+    def _log_original_response_body(self, label: str, text: str) -> None:
+        if not REQUEST_LOG_ENABLED:
+            return
+        size = len(text.encode("utf-8"))
+        print(
+            f"\n{'=' * 60}\n"
+            f"[o1key GPT Image] 原始返回响应体日志 | {label} | "
+            f"响应体积: {self._format_body_size(size)}\n"
+            f"{text}\n"
+            f"{'=' * 60}\n"
+        )
+
+    @staticmethod
+    def _extract_error_message(payload_or_text, status_code: int = 0) -> str:
+        payload = payload_or_text
+        if isinstance(payload_or_text, str):
+            try:
+                payload = json.loads(payload_or_text)
+            except Exception:
+                return get_friendly_message(status_code, payload_or_text)
+
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, str) and error.strip():
+                return error.strip()
+            if isinstance(error, dict):
+                msg = error.get("message") or error.get("msg") or error.get("error")
+                if msg:
+                    return str(msg)
+                return json.dumps(error, ensure_ascii=False)
+
+            msg = payload.get("message") or payload.get("msg")
+            if msg:
+                return str(msg)
+
+        return get_friendly_message(status_code, str(payload_or_text))
+
+    @staticmethod
+    def _extract_error_detail(payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            return {}
+        detail = payload.get("error_detail")
+        return detail if isinstance(detail, dict) else {}
+
+    @staticmethod
+    def _should_retry_async_failure(error_detail: dict, retry_index: int) -> bool:
+        if not isinstance(error_detail, dict) or not error_detail:
+            return False
+
+        code = error_detail.get("code")
+        category = error_detail.get("category")
+        retryable = error_detail.get("retryable")
+
+        if code in _ASYNC_NON_RETRYABLE_ERROR_CODES:
+            return False
+        if code == "image_unknown_error":
+            return retry_index == 0
+        if retryable is True:
+            return True
+        if retryable is False:
+            return False
+
+        return (
+            code in _ASYNC_RETRYABLE_ERROR_CODES
+            or category in _ASYNC_RETRYABLE_ERROR_CATEGORIES
+        )
+
+    @staticmethod
+    def _coerce_progress_percent(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip().rstrip("%")
+            if not text:
+                return None
+            try:
+                value = float(text)
+            except ValueError:
+                return None
+        elif isinstance(value, (int, float)):
+            value = float(value)
+        else:
+            return None
+
+        if 0 <= value <= 1:
+            value *= 100
+        return max(0, min(100, int(round(value))))
+
+    @staticmethod
+    def _emit_progress(progress_callback: Optional[Callable[[int], None]], pct: int) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(pct)
+        except Exception as error:
+            print(f"[o1key GPT Image] progress callback failed: {error}")
+
+    @staticmethod
+    def _resize_png_bytes(source_image: Image.Image, scale: float) -> bytes:
+        if scale < 0.999:
+            width, height = source_image.size
+            new_width = max(1, int(width * scale))
+            new_height = max(1, int(height * scale))
+            image = source_image.resize((new_width, new_height), Image.LANCZOS)
+        else:
+            image = source_image
+
+        buf = BytesIO()
+        image.save(buf, format="PNG")
+        return buf.getvalue()
+
+    @staticmethod
+    def _pil_to_png_bytes(image: Image.Image) -> bytes:
+        buf = BytesIO()
+        image.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _fit_png_assets_to_body_limit(self, assets: List[Dict[str, Any]], build_body) -> Dict[str, bytes]:
+        """
+        根据完整 JSON 请求体大小压缩图片资产，保证最终 body 不超过 20MB。
+        使用同一个缩放比例二分搜索，让压缩结果尽量贴近上限而不是过度压缩。
+        """
+        asset_bytes = {asset["key"]: asset["bytes"] for asset in assets}
+        initial_size = self._json_body_size(build_body(asset_bytes))
+        if initial_size <= self._MAX_BODY_BYTES:
+            return asset_bytes
+
+        if not assets:
+            raise RuntimeError(
+                f"请求体大小 {initial_size // 1024}KB 超过 20MB，且没有可压缩图片"
+            )
+
+        originals = []
+        for asset in assets:
+            image = Image.open(BytesIO(asset["bytes"]))
+            image.load()
+            originals.append((asset, image.copy()))
+
+        low = 0.001
+        high = 1.0
+        best_bytes = None
+        best_size = 0
+        best_scale = 0.0
+
+        for _ in range(16):
+            scale = (low + high) / 2
+            candidate = {}
+            for asset, image in originals:
+                candidate[asset["key"]] = self._resize_png_bytes(image, scale)
+
+            body_size = self._json_body_size(build_body(candidate))
+            if body_size <= self._MAX_BODY_BYTES:
+                best_bytes = candidate
+                best_size = body_size
+                best_scale = scale
+                low = scale
+            else:
+                high = scale
+
+        if best_bytes is None:
+            candidate = {}
+            for asset, image in originals:
+                candidate[asset["key"]] = self._resize_png_bytes(image, low)
+            body_size = self._json_body_size(build_body(candidate))
+            if body_size > self._MAX_BODY_BYTES:
+                raise RuntimeError(
+                    f"图片已压缩到最小比例，但请求体仍超过 20MB：{body_size // 1024}KB"
+                )
+            best_bytes = candidate
+            best_size = body_size
+            best_scale = low
+
+        print(
+            f"[o1key GPT Image] 请求体超过 20MB，已等比压缩图片："
+            f"{initial_size // 1024}KB → {best_size // 1024}KB，scale={best_scale:.3f}"
+        )
+        return best_bytes
 
     @staticmethod
     def _tensor_to_png_bytes(tensor: torch.Tensor) -> bytes:
@@ -500,6 +769,316 @@ class GptImageClient:
 
         return request_task.result()
 
+    # ── 新版异步 GPT Image 接口 ──────────────────────────────────────────────
+
+    def _build_async_generate_body(
+        self,
+        prompt: str,
+        model: str,
+        quality: str,
+        size: str,
+        n: int,
+        image_list: Optional[List[torch.Tensor]] = None,
+        mask_tensor: Optional[torch.Tensor] = None,
+        output_format: str = "png",
+    ) -> dict:
+        api_model = _MODEL_NAME_MAP.get(model, model)
+        assets: List[Dict[str, Any]] = []
+        image_keys: List[str] = []
+        mask_key = None
+
+        if image_list:
+            for idx_img, img_tensor in enumerate(image_list):
+                pil_images = tensor_to_pil(img_tensor)
+                if not pil_images:
+                    continue
+                key = f"image_{idx_img}"
+                image_keys.append(key)
+                assets.append({
+                    "key": key,
+                    "label": f"参考图{idx_img + 1}",
+                    "bytes": self._pil_to_png_bytes(pil_images[0]),
+                })
+
+        if mask_tensor is not None:
+            if not image_list:
+                raise ValueError("提供了蒙版但未提供图片，请同时提供图片和蒙版")
+
+            first_tensor = image_list[0]
+            if first_tensor.dim() == 3:
+                first_tensor = first_tensor.unsqueeze(0)
+            image_size = (first_tensor.shape[1], first_tensor.shape[2])
+            mask_key = "mask"
+            assets.append({
+                "key": mask_key,
+                "label": "蒙版",
+                "bytes": self._mask_tensor_to_rgba_png_bytes(mask_tensor, image_size),
+            })
+
+        def _make_body(asset_bytes: Dict[str, bytes]) -> dict:
+            body = {
+                "model": api_model,
+                "prompt": prompt,
+                "images": [
+                    self._png_bytes_to_data_url(asset_bytes[key])
+                    for key in image_keys
+                    if key in asset_bytes
+                ],
+                "size": size if size else "auto",
+                "quality": quality,
+                "n": int(n),
+                "output_format": output_format or "png",
+            }
+            if mask_key and mask_key in asset_bytes:
+                body["mask"] = {
+                    "image_url": self._png_bytes_to_data_url(asset_bytes[mask_key])
+                }
+            return body
+
+        original_asset_bytes = {asset["key"]: asset["bytes"] for asset in assets}
+        original_body = _make_body(original_asset_bytes)
+        self._log_original_request_body("async generateImage", original_body)
+
+        asset_bytes = self._fit_png_assets_to_body_limit(assets, _make_body)
+        body = _make_body(asset_bytes)
+        body_size = self._json_body_size(body)
+        if body_size > self._MAX_BODY_BYTES:
+            raise RuntimeError(f"请求体超过 20MB：{body_size // 1024}KB")
+
+        return body
+
+    async def _submit_generate_image_task(
+        self,
+        session: aiohttp.ClientSession,
+        payload: dict,
+    ) -> str:
+        url = f"{self.base_url}{_ENDPOINT_ASYNC_GENERATE}"
+        last_status = None
+
+        for attempt in range(DEFAULT_MAX_RETRIES + 1):
+            t0 = time.time()
+            async with session.post(
+                url,
+                json=payload,
+                headers=self._json_headers(),
+            ) as resp:
+                elapsed = time.time() - t0
+                text = await resp.text()
+                self._log_original_response_body(
+                    f"submit generateImage status={resp.status}",
+                    text,
+                )
+
+                if resp.status not in (200, 201, 202):
+                    last_status = resp.status
+                    if resp.status in RETRYABLE_STATUS_CODES and attempt < DEFAULT_MAX_RETRIES:
+                        friendly = get_friendly_message(resp.status)
+                        delay = _compute_delay(
+                            attempt,
+                            DEFAULT_BASE_DELAY,
+                            DEFAULT_MAX_DELAY,
+                            DEFAULT_BACKOFF_FACTOR,
+                        )
+                        print(f"[o1key GPT Image] {friendly} {delay:.1f}s 后重试提交 ({attempt+1}/{DEFAULT_MAX_RETRIES})...")
+                        await asyncio.sleep(delay)
+                        continue
+                    raise RuntimeError(self._extract_error_message(text, resp.status))
+
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    raise RuntimeError(f"提交响应 JSON 解析失败，原始内容：{text[:500]}") from None
+
+                task_id = data.get("task_id")
+                if not task_id:
+                    raise RuntimeError(f"提交响应中未找到 task_id: {data}")
+
+                status = data.get("status", "")
+                print(f"[o1key GPT Image] 异步任务已提交 | task_id={task_id} | status={status} | 耗时 {elapsed:.1f}s")
+                return task_id
+
+        if last_status and last_status in HTTP_ERROR_MESSAGES:
+            raise RuntimeError(HTTP_ERROR_MESSAGES[last_status])
+        raise RuntimeError(f"异步任务提交失败: 重试 {DEFAULT_MAX_RETRIES} 次后仍然失败")
+
+    async def _poll_generate_image_task(
+        self,
+        session: aiohttp.ClientSession,
+        task_id: str,
+        progress_callback: Optional[Callable[[int], None]] = None,
+    ) -> dict:
+        url = f"{self.base_url}{_ENDPOINT_ASYNC_TASK.format(task_id=task_id)}"
+        start_time = time.time()
+
+        poll_count = 0
+        last_poll_at = start_time
+
+        while True:
+            if poll_count < len(_ASYNC_POLL_SCHEDULE):
+                next_poll_at = start_time + _ASYNC_POLL_SCHEDULE[poll_count]
+            else:
+                next_poll_at = last_poll_at + _ASYNC_POLL_INTERVAL
+
+            sleep_time = next_poll_at - time.time()
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+
+            last_poll_at = time.time()
+            elapsed = last_poll_at - start_time
+            if elapsed > _ASYNC_MAX_WAIT:
+                raise RuntimeError(f"任务 {task_id} 超时（>{int(_ASYNC_MAX_WAIT)}秒），请稍后用 task_id 查询结果")
+
+            poll_count += 1
+            async with session.get(url, headers=self._auth_headers()) as resp:
+                text = await resp.text()
+                self._log_original_response_body(
+                    f"poll task status={resp.status}",
+                    text,
+                )
+                if resp.status != 200:
+                    raise RuntimeError(self._extract_error_message(text, resp.status))
+
+                try:
+                    task = json.loads(text)
+                except Exception:
+                    raise RuntimeError(f"任务查询响应 JSON 解析失败，原始内容：{text[:500]}") from None
+
+            status = task.get("status", "UNKNOWN")
+            progress = task.get("progress")
+            progress_pct = self._coerce_progress_percent(progress)
+            if POLL_LOG_ENABLED:
+                progress_text = f" | progress={progress}" if progress is not None else ""
+                print(f"[o1key GPT Image] 查询任务 #{poll_count} | task_id={task_id} | status={status}{progress_text}")
+
+            if status == "SUCCESS":
+                self._emit_progress(progress_callback, 100)
+                return task
+            if progress_pct is not None and progress_pct < 100:
+                self._emit_progress(progress_callback, progress_pct)
+            if status == "FAILURE":
+                error_message = self._extract_error_message(task, 500) or "生成失败"
+                raise _AsyncImageTaskFailure(
+                    error_message,
+                    self._extract_error_detail(task),
+                )
+            if status not in ("SUBMITTED", "IN_PROGRESS"):
+                raise RuntimeError(f"未知任务状态 {status}: {task}")
+
+    async def _parse_async_task_images(
+        self,
+        task: dict,
+        session: aiohttp.ClientSession,
+    ) -> List[Image.Image]:
+        data = task.get("data", {})
+        image_items = data.get("images") if isinstance(data, dict) else None
+
+        if not isinstance(image_items, list) or not image_items:
+            raise RuntimeError(f"任务结果中未找到 data.images: {task}")
+
+        images: List[Image.Image] = []
+        for idx, item in enumerate(image_items, 1):
+            if not isinstance(item, dict):
+                continue
+
+            url = item.get("url") or item.get("image_url")
+            b64 = item.get("b64_json", "")
+
+            if url and isinstance(url, str) and url.startswith("data:image"):
+                try:
+                    _, b64_data = url.split(",", 1)
+                    img = Image.open(BytesIO(base64.b64decode(b64_data)))
+                    images.append(img)
+                    print(f"[o1key GPT Image] 第 {idx} 张 data URL 解码完成 ({img.size[0]}×{img.size[1]})")
+                except Exception as e:
+                    raise RuntimeError(f"第 {idx} 张 data URL 解码失败: {e}") from None
+            elif url and isinstance(url, str) and url.startswith("http"):
+                async with session.get(url, allow_redirects=True) as resp:
+                    if resp.status != 200:
+                        raise RuntimeError(f"图像下载失败 HTTP {resp.status}，URL: {url}")
+                    img_bytes = await resp.read()
+                img = Image.open(BytesIO(img_bytes))
+                images.append(img)
+                print(f"[o1key GPT Image] 第 {idx} 张 URL 下载完成 ({img.size[0]}×{img.size[1]}) | {url}")
+            elif b64:
+                img = self._decode_b64_image(b64, f"第 {idx} 张")
+                images.append(img)
+            else:
+                print(f"[o1key GPT Image] 警告：第 {idx} 条结果既无 url 也无 b64_json，已跳过")
+
+        if not images:
+            raise RuntimeError("任务成功但没有可用图片结果")
+
+        return images
+
+    async def _generate_image_task_async(
+        self,
+        prompt: str,
+        model: str,
+        quality: str,
+        size: str,
+        n: int,
+        seed: int,
+        image_tensor: Optional[List[torch.Tensor]] = None,
+        mask_tensor: Optional[torch.Tensor] = None,
+        output_format: str = "png",
+        progress_callback: Optional[Callable[[int], None]] = None,
+    ) -> List[Image.Image]:
+        body = self._build_async_generate_body(
+            prompt=prompt,
+            model=model,
+            quality=quality,
+            size=size,
+            n=n,
+            image_list=image_tensor,
+            mask_tensor=mask_tensor,
+            output_format=output_format,
+        )
+
+        mode = "图像编辑" if mask_tensor is not None else ("图生图" if image_tensor else "文生图")
+        body_size = self._json_body_size(body)
+        print(
+            f"[o1key GPT Image] {mode} | 新异步接口 | 模型={model} | "
+            f"quality={quality} | size={size} | n={n} | body={body_size // 1024}KB"
+        )
+
+        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
+        timeout = aiohttp.ClientTimeout(total=_ASYNC_MAX_WAIT + 120)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            last_error = None
+            for retry_index in range(len(_ASYNC_RETRY_DELAYS) + 1):
+                try:
+                    task_id = await self._submit_generate_image_task(session, body)
+                    task = await self._poll_generate_image_task(
+                        session,
+                        task_id,
+                        progress_callback=progress_callback,
+                    )
+                    return await self._parse_async_task_images(task, session)
+                except _AsyncImageTaskFailure as error:
+                    last_error = error
+                    detail = error.error_detail
+                    if (
+                        retry_index < len(_ASYNC_RETRY_DELAYS)
+                        and self._should_retry_async_failure(detail, retry_index)
+                    ):
+                        delay = _ASYNC_RETRY_DELAYS[retry_index]
+                        code = detail.get("code", "unknown")
+                        category = detail.get("category", "unknown")
+                        failed_task_id = detail.get("task_id", "")
+                        task_text = f" | failed_task_id={failed_task_id}" if failed_task_id else ""
+                        print(
+                            f"[o1key GPT Image] 任务失败但可重试 | code={code} | "
+                            f"category={category}{task_text} | {delay:.0f}s 后重试 "
+                            f"({retry_index + 1}/{len(_ASYNC_RETRY_DELAYS)})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    raise RuntimeError(str(error)) from None
+
+            if last_error is not None:
+                raise RuntimeError(str(last_error)) from None
+            raise RuntimeError("生成失败")
+
     # ── 文生图 / 图生图（generations 接口）───────────────────────────────────
 
     async def _generate_async(
@@ -804,6 +1383,53 @@ class GptImageClient:
             except TimeoutError:
                 raise RuntimeError(
                     f"o1key GPT Image 请求超时（>{_REQUEST_TIMEOUT}s），请检查网络或稍后重试"
+                )
+
+    def generate_image_async_sync(
+        self,
+        prompt: str,
+        model: str,
+        quality: str,
+        size: str,
+        n: int,
+        seed: int,
+        image_tensor: Optional[List[torch.Tensor]] = None,
+        mask_tensor: Optional[torch.Tensor] = None,
+        output_format: str = "png",
+        progress_callback: Optional[Callable[[int], None]] = None,
+    ) -> List[Image.Image]:
+        """
+        新版异步任务入口，供节点调用。
+        旧 run_sync 保留兼容，但 GPT Image 节点不再使用旧同步接口。
+        """
+        coro = self._generate_image_task_async(
+            prompt=prompt,
+            model=model,
+            quality=quality,
+            size=size,
+            n=n,
+            seed=seed,
+            image_tensor=image_tensor,
+            mask_tensor=mask_tensor,
+            output_format=output_format,
+            progress_callback=progress_callback,
+        )
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self._run_with_interrupt(coro))
+            finally:
+                loop.close()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run)
+            try:
+                return future.result(timeout=_ASYNC_MAX_WAIT + 150)
+            except TimeoutError:
+                raise RuntimeError(
+                    f"o1key GPT Image 异步任务超时（>{int(_ASYNC_MAX_WAIT)}秒），请稍后用 task_id 查询结果"
                 )
 
     # ── 余额查询 ──────────────────────────────────────────────────────────────

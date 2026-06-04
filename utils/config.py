@@ -148,4 +148,6 @@ def get_async_api_base_url() -> str:
 
 def get_base_url_by_route(route: str) -> str:
     """根据网络线路选项返回对应域名，未匹配则走 config 垫底"""
+    if isinstance(route, (list, tuple)):
+        route = route[0] if route else None
     return NETWORK_ROUTES.get(route, get_api_base_url())

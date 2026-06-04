@@ -34,8 +34,7 @@ class GeminiAPIClient(BaseAPIClient):
         
         super().__init__(
             base_url=get_api_base_url(),
-            api_key=api_key,
-            max_request_size=100 * 1024 * 1024
+            api_key=api_key
         )
     
     @staticmethod
@@ -188,6 +187,7 @@ class GeminiAPIClient(BaseAPIClient):
         enable_image_search: bool = False,
         image_compression: str = None,
         thinking_level: str = None,
+        request_log_enabled: bool = True,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -204,21 +204,90 @@ class GeminiAPIClient(BaseAPIClient):
         Returns:
             请求体字典
         """
+        import json
+
         _MAX_BODY_BYTES = 20 * 1024 * 1024  # 20 MB
+        _BODY_TARGET_BYTES = int(_MAX_BODY_BYTES * 0.9)
 
         parts = []
 
         # 添加文本部分
         parts.append({"text": prompt})
 
+        image_config = {"imageSize": resolution}
+        if aspect_ratio and aspect_ratio != "智能":
+            image_config["aspectRatio"] = aspect_ratio
+
+        def _build_request_body(body_parts: List[dict]) -> Dict[str, Any]:
+            body = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": body_parts
+                    }
+                ],
+                "generationConfig": {
+                    "responseModalities": ["IMAGE"],
+                    "imageConfig": image_config
+                }
+            }
+
+            # 添加思考深度配置
+            if thinking_level:
+                body["generationConfig"]["thinkingConfig"] = {
+                    "thinkingLevel": thinking_level,
+                    "includeThoughts": True
+                }
+
+            # 添加图片压缩参数
+            if image_compression:
+                body["image_compression"] = image_compression
+
+            # 添加 Google Search Grounding（如果启用）
+            # 新异步接口要求直接放在请求体顶层：{"google_search": true}
+            if enable_grounding or enable_image_search:
+                body["google_search"] = True
+
+            return body
+
+        def _request_size(body: Dict[str, Any]) -> int:
+            return len(json.dumps(body).encode("utf-8"))
+
+        def _format_size(size: int) -> str:
+            if size < 1024 * 1024:
+                return f"{size / 1024:.2f}KB"
+            return f"{size / 1024 / 1024:.2f}MB"
+
+        def _shorten_base64_for_log(obj, max_len: int = 200):
+            if isinstance(obj, dict):
+                result = {}
+                for key, value in obj.items():
+                    if key == "data" and isinstance(value, str) and len(value) > max_len:
+                        result[key] = f"<base64 data, {len(value)} chars>"
+                    else:
+                        result[key] = _shorten_base64_for_log(value, max_len)
+                return result
+            if isinstance(obj, list):
+                return [_shorten_base64_for_log(item, max_len) for item in obj]
+            return obj
+
+        def _log_original_request_body(body: Dict[str, Any]) -> None:
+            body_size = _request_size(body)
+            print(
+                f"\n{'=' * 60}\n"
+                f"[原始请求体日志] 请求体积: {_format_size(body_size)} "
+                f"(inline_data.data 已折叠显示 base64 长度)\n"
+                f"{json.dumps(_shorten_base64_for_log(body), ensure_ascii=False, indent=2)}\n"
+                f"{'=' * 60}\n"
+            )
+
+        original_request_logged = False
+
         # 添加图像部分（如果有）
         if images:
-            working_images = list(images)
-
-            # 编码一次，估算大小，超限则迭代缩放
-            for _attempt in range(10):
+            def _build_image_parts(src_images: List[Image.Image]) -> List[dict]:
                 img_parts = []
-                for img in working_images:
+                for img in src_images:
                     img_base64 = encode_image_to_base64(img)
                     img_parts.append({
                         "inline_data": {
@@ -226,94 +295,49 @@ class GeminiAPIClient(BaseAPIClient):
                             "data": img_base64
                         }
                     })
+                return img_parts
 
-                # 估算完整 body 大小（不含工具字段，工具字段很小可忽略）
-                est_image_config = {"imageSize": resolution}
-                if aspect_ratio and aspect_ratio != "智能":
-                    est_image_config["aspectRatio"] = aspect_ratio
-                estimated = self._estimate_body_size(
-                    parts + img_parts,
-                    {
-                        "generationConfig": {
-                            "responseModalities": ["IMAGE"],
-                            "imageConfig": est_image_config
-                        }
-                    }
+            def _estimate_with_images(img_parts: List[dict]) -> int:
+                return _request_size(_build_request_body(parts + img_parts))
+
+            working_images = list(images)
+            img_parts = _build_image_parts(working_images)
+            original_request_body = _build_request_body(parts + img_parts)
+            if request_log_enabled:
+                _log_original_request_body(original_request_body)
+                original_request_logged = True
+            estimated = _estimate_with_images(img_parts)
+
+            if estimated > _MAX_BODY_BYTES:
+                ratio = _BODY_TARGET_BYTES / estimated
+                scale = ratio ** 0.5  # 面积比 → 线性比
+                working_images = self._scale_images_to_fit(working_images, scale)
+                img_parts = _build_image_parts(working_images)
+                estimated = _estimate_with_images(img_parts)
+
+                orig_sizes = ", ".join(f"{img.width}×{img.height}" for img in images)
+                new_sizes = ", ".join(f"{img.width}×{img.height}" for img in working_images)
+                size_mb = estimated / (1024 * 1024)
+                target_mb = _BODY_TARGET_BYTES / (1024 * 1024)
+                print(
+                    f"Nano Banana Pro: 输入图片已按请求体目标大小自动缩放\n"
+                    f"  原始尺寸: {orig_sizes}\n"
+                    f"  缩放后:   {new_sizes}\n"
+                    f"  请求体积: {size_mb:.2f}MB（目标 {target_mb:.2f}MB，限制 20MB）"
                 )
 
-                if estimated <= _MAX_BODY_BYTES:
-                    parts.extend(img_parts)
-                    if _attempt > 0:
-                        orig_sizes = ", ".join(
-                            f"{img.width}×{img.height}" for img in images
-                        )
-                        new_sizes = ", ".join(
-                            f"{img.width}×{img.height}" for img in working_images
-                        )
-                        size_mb = estimated / (1024 * 1024)
-                        print(
-                            f"Nano Banana Pro: 输入图片已自动缩放以控制请求体积\n"
-                            f"  原始尺寸: {orig_sizes}\n"
-                            f"  缩放后:   {new_sizes}\n"
-                            f"  请求体积: {size_mb:.2f}MB（限制 20MB）"
-                        )
-                    break
-                else:
-                    # 按像素面积比推算需要的线性缩放系数，留 5% 余量
-                    ratio = (_MAX_BODY_BYTES * 0.95) / estimated
-                    scale = ratio ** 0.5  # 面积比 → 线性比
-                    working_images = self._scale_images_to_fit(working_images, scale)
-            else:
-                # 10 轮后仍超限，使用最后一次结果（极端情况兜底）
-                parts.extend(img_parts)
+            parts.extend(img_parts)
 
-        # 构建请求体
-        image_config = {"imageSize": resolution}
-        if aspect_ratio and aspect_ratio != "智能":
-            image_config["aspectRatio"] = aspect_ratio
+        request_body = _build_request_body(parts)
+        if request_log_enabled and not original_request_logged:
+            _log_original_request_body(request_body)
 
-        request_body = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": parts
-                }
-            ],
-            "generationConfig": {
-                "responseModalities": ["IMAGE"],
-                "imageConfig": image_config
-            }
-        }
-
-        # 添加思考深度配置
-        if thinking_level:
-            request_body["generationConfig"]["thinkingConfig"] = {
-                "thinkingLevel": thinking_level,
-                "includeThoughts": True
-            }
-
-        # 添加图片压缩参数
-        if image_compression:
-            request_body["image_compression"] = image_compression
-
-        # 添加 Google Search Grounding 工具（如果启用）
-        # 注意：enable_image_search=True 时会自动隐含 enable_grounding
-        if enable_grounding or enable_image_search:
-            if enable_image_search:
-                # 同时启用网页搜索和图片搜索（仅 nano-banana-2 / gemini-3.1-flash-image-preview 支持）
-                request_body["tools"] = [
-                    {
-                        "google_search": {
-                            "searchTypes": {
-                                "webSearch": {},
-                                "imageSearch": {}
-                            }
-                        }
-                    }
-                ]
-            else:
-                # 仅启用网页搜索（通用）
-                request_body["tools"] = [{"google_search": {}}]
+        request_size = _request_size(request_body)
+        if request_size > _MAX_BODY_BYTES:
+            raise ValueError(
+                f"请求体超过 20MB 限制（当前 {request_size / 1024 / 1024:.2f}MB），"
+                "已停止提交；请减少参考图数量、降低图片复杂度或缩短提示词"
+            )
 
         return request_body
     
@@ -924,7 +948,7 @@ class GeminiAPIClient(BaseAPIClient):
         )
 
         return self.run_async_in_thread(coro)
-    
+
     async def generate_multi_prompts_async(
         self,
         prompts: List[str],
@@ -1104,6 +1128,5 @@ class GeminiAPIClient(BaseAPIClient):
             enable_grounding=enable_grounding,
             enable_image_search=enable_image_search
         )
-        
+
         return self.run_async_in_thread(coro)
-    

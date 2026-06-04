@@ -40,7 +40,8 @@ class BaseAPIClient(ABC):
         Args:
             base_url: API 基础 URL
             api_key: API 密钥
-            max_request_size: 最大请求体大小（字节），默认 100MB
+            max_request_size: 兼容参数；基类不再用它限制 JSON 请求体，
+                部分子类仍用它作为上传文件大小限制
         """
         self.base_url = base_url
         self.api_key = api_key
@@ -116,24 +117,6 @@ class BaseAPIClient(ABC):
                 "Content-Type": "application/json"
             }
     
-    def check_request_size(self, request_body: Dict[str, Any]) -> None:
-        """
-        检查请求体大小是否超过限制
-        
-        Args:
-            request_body: 请求体字典
-        
-        Raises:
-            ValueError: 如果请求体超过限制
-        """
-        request_json = json.dumps(request_body)
-        request_size = len(request_json.encode('utf-8'))
-        
-        if request_size > self.max_request_size:
-            raise ValueError(
-                "请求体积超过100MB限制，请调整分辨率或减少图片数量"
-            )
-    
     def get_http_error_message(self, status_code: int, error_message: str) -> Optional[str]:
         """
         子类可重写：为指定 HTTP 状态码返回自定义错误文案。
@@ -184,9 +167,6 @@ class BaseAPIClient(ABC):
 
         url = f"{self.base_url}{endpoint}"
         headers = self.get_headers(use_bearer_token)
-
-        # 检查请求大小
-        self.check_request_size(request_body)
 
         close_session = False
         if session is None:

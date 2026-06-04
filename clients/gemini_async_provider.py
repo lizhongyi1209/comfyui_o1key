@@ -72,7 +72,9 @@ class GeminiAsyncImageProvider(BaseAsyncImageProvider):
             resolution=resolution,
             enable_grounding=kwargs.get("enable_grounding", False),
             enable_image_search=kwargs.get("enable_image_search", False),
-            image_compression=getattr(self, 'image_compression', None),
+            image_compression=getattr(self, "image_compression", None),
+            thinking_level=kwargs.get("thinking_level"),
+            request_log_enabled=False,
         )
 
     def extract_task_id(self, response: dict) -> str:
@@ -85,6 +87,23 @@ class GeminiAsyncImageProvider(BaseAsyncImageProvider):
         return response.get("status", "UNKNOWN")
 
     async def parse_result(self, result_data: dict, session) -> List[Image.Image]:
+        images = result_data.get("images") if isinstance(result_data, dict) else None
+        if isinstance(images, list) and images:
+            parsed = []
+            for item in images:
+                if not isinstance(item, dict):
+                    continue
+                image_url = item.get("url") or item.get("image_url")
+                if image_url:
+                    async with session.get(image_url) as img_resp:
+                        if img_resp.status == 200:
+                            img_bytes = await img_resp.read()
+                            parsed.append(Image.open(BytesIO(img_bytes)).convert("RGB"))
+                        else:
+                            raise RuntimeError(f"下载图片失败 ({img_resp.status}): {image_url}")
+            if parsed:
+                return parsed
+
         # 异步接口可能直接返回 image_url
         image_url = result_data.get("image_url", "") if isinstance(result_data, dict) else ""
         if image_url:
@@ -124,19 +143,44 @@ class GeminiAsyncImageProvider(BaseAsyncImageProvider):
 
     def extract_progress(self, response: dict) -> Optional[float]:
         """从轮询响应中提取进度（0.0-1.0）"""
+
+        def _coerce(val) -> Optional[float]:
+            if val is None or isinstance(val, bool):
+                return None
+            if isinstance(val, (int, float)):
+                progress = float(val)
+            elif isinstance(val, str):
+                text = val.strip()
+                if not text:
+                    return None
+                has_percent_suffix = text.endswith("%")
+                if has_percent_suffix:
+                    text = text[:-1].strip()
+                try:
+                    progress = float(text)
+                except ValueError:
+                    return None
+                if has_percent_suffix:
+                    progress /= 100.0
+            else:
+                return None
+            if progress > 1.0:
+                progress /= 100.0
+            return max(0.0, min(progress, 1.0))
+
         # 直接字段：progress / percentage
-        for field in ("progress", "percentage"):
-            val = response.get(field)
-            if val is not None and isinstance(val, (int, float)):
-                return val / 100.0 if val > 1 else float(val)
+        for field in ("progress", "percentage", "percent"):
+            progress = _coerce(response.get(field))
+            if progress is not None:
+                return progress
 
         # 嵌套字段：progressInfo / progress_info
         progress_info = response.get("progressInfo") or response.get("progress_info")
         if isinstance(progress_info, dict):
-            for field in ("progress", "percentage"):
-                val = progress_info.get(field)
-                if val is not None and isinstance(val, (int, float)):
-                    return val / 100.0 if val > 1 else float(val)
+            for field in ("progress", "percentage", "percent"):
+                progress = _coerce(progress_info.get(field))
+                if progress is not None:
+                    return progress
 
         return None
 

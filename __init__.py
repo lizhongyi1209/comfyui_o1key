@@ -12,6 +12,7 @@ Comfyui_o1key - ComfyUI 自定义节点集合
 
 import ssl
 import logging
+import asyncio
 
 # 屏蔽 ComfyUI 资产扫描的终端日志输出
 _seeder_filter = lambda record: not any(
@@ -20,7 +21,57 @@ _seeder_filter = lambda record: not any(
 )
 logging.getLogger().addFilter(_seeder_filter)
 
-from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, BatchCleanMetadata, VideoPreview, GoogleVeo, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, O1keyGPTImageBatch, O1keyGrokImage, KVideoFirstLast, KVideoImage2Video
+
+def _is_ignored_asyncio_win10054(context):
+    exc = context.get("exception")
+    if not (
+        isinstance(exc, ConnectionResetError)
+        and getattr(exc, "winerror", None) == 10054
+    ):
+        return False
+
+    handle = str(context.get("handle", ""))
+    message = str(context.get("message", ""))
+    marker = "_ProactorBasePipeTransport._call_connection_lost"
+    return marker in handle or marker in message
+
+
+def _install_asyncio_win10054_filter(loop):
+    if getattr(loop, "_o1key_win10054_filter_installed", False):
+        return loop
+
+    previous_handler = loop.get_exception_handler()
+
+    def _o1key_asyncio_exception_handler(loop, context):
+        if _is_ignored_asyncio_win10054(context):
+            return
+        if previous_handler is not None:
+            previous_handler(loop, context)
+        else:
+            loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_o1key_asyncio_exception_handler)
+    setattr(loop, "_o1key_win10054_filter_installed", True)
+    return loop
+
+
+try:
+    _install_asyncio_win10054_filter(asyncio.get_event_loop())
+except RuntimeError:
+    pass
+
+if not getattr(asyncio, "_o1key_new_event_loop_patched", False):
+    _o1key_original_new_event_loop = asyncio.new_event_loop
+
+    def _o1key_new_event_loop(*args, **kwargs):
+        return _install_asyncio_win10054_filter(
+            _o1key_original_new_event_loop(*args, **kwargs)
+        )
+
+    asyncio.new_event_loop = _o1key_new_event_loop
+    asyncio._o1key_new_event_loop_patched = True
+
+from .nodes import NanoBananaPro, BatchNanoBananaPro, GoogleGemini, LoadFile, ImageStitchPro, BatchCleanMetadata, VideoPreview, GoogleVeo, Google31Video, FluxImageEdit, UniversalLLMChat, KlingVideo, KlingFirstLastFrame, KlingMotionControlTest, AspectRatioPreset, BatchImagesO1key, Seedance, SeedanceMultiModal, StreamPreview, DoubaoImage, O1keyGPTImage, O1keyGPTImageBatch, O1keyGrokImage, O1keyGrokVideo, KVideoFirstLast, KVideoImage2Video
 from .nodes import K3Video, K3VideoFirstLast, K3MotionControl, K3MotionVideoCheck, NanoBananaV2, NanoBananaV2Batch, SaveImageFormat
 from .nodes import O1keySavePSD
 from .nodes import O1keyRemoveBackground
@@ -73,6 +124,7 @@ NODE_CLASS_MAPPINGS = {
     "BatchCleanMetadata": BatchCleanMetadata,
     "VideoPreview": VideoPreview,
     "GoogleVeo": GoogleVeo,
+    "Google31Video": Google31Video,
     "FluxImageEdit": FluxImageEdit,
     "UniversalLLMChat": UniversalLLMChat,
     "KlingVideo": KlingVideo,
@@ -88,6 +140,7 @@ NODE_CLASS_MAPPINGS = {
     "O1keyGPTImage": O1keyGPTImage,
     "O1keyGPTImageBatch": O1keyGPTImageBatch,
     "O1keyGrokImage": O1keyGrokImage,
+    "O1keyGrokVideo": O1keyGrokVideo,
     "KVideoFirstLast": KVideoFirstLast,
     "KVideoImage2Video": KVideoImage2Video,
     "K3Video": K3Video,
@@ -113,6 +166,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BatchCleanMetadata": "批量任务（防AI识别）",
     "VideoPreview": "预览视频",
     "GoogleVeo": "Google Veo - ab",
+    "Google31Video": "Google 3.1 Video",
     "FluxImageEdit": "Flux2 图像编辑",
     "UniversalLLMChat": "全能LLM对话助手",
     "KlingVideo": "文/图生视频 自研模型",
@@ -128,6 +182,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "O1keyGPTImage": "o1key GPT Image",
     "O1keyGPTImageBatch": "o1key GPT Image（批量）",
     "O1keyGrokImage": "Grok Image",
+    "O1keyGrokVideo": "Grok Video",
     "KVideoFirstLast": "K26 图生视频（首尾帧）",
     "KVideoImage2Video": "K26 图生视频",
     "K3Video": "K3 图生视频 自研",
@@ -182,6 +237,75 @@ try:
             output_dir,
             f".o1key_history_{_get_o1key_server_port()}.json",
         )
+
+    def _get_o1key_notes_file():
+        import os as _os_notes
+        input_dir = _os_notes.path.abspath(folder_paths.get_input_directory())
+        _os_notes.makedirs(input_dir, exist_ok=True)
+        return _os_notes.path.join(input_dir, "o1key-notes.json")
+
+    def _extract_o1key_notes(payload):
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict) and isinstance(payload.get("notes"), list):
+            return payload["notes"]
+        return None
+
+    @PromptServer.instance.routes.get("/o1key/notes")
+    async def get_o1key_notes(request):
+        import os as _os_notes
+        import json as _json_notes
+
+        notes_file = _get_o1key_notes_file()
+        exists = _os_notes.path.isfile(notes_file)
+        notes = []
+
+        if exists:
+            try:
+                with open(notes_file, "r", encoding="utf-8") as nf:
+                    loaded = _json_notes.load(nf)
+                notes = _extract_o1key_notes(loaded)
+                if notes is None:
+                    return web.json_response(
+                        {"error": "invalid notes file", "path": notes_file},
+                        status=500,
+                    )
+            except Exception as e:
+                return web.json_response(
+                    {"error": str(e), "path": notes_file},
+                    status=500,
+                )
+
+        return web.json_response({"notes": notes, "path": notes_file, "exists": exists})
+
+    @PromptServer.instance.routes.post("/o1key/notes")
+    async def save_o1key_notes(request):
+        import os as _os_notes
+        import json as _json_notes
+
+        try:
+            payload = await request.json()
+            notes = _extract_o1key_notes(payload)
+            if notes is None:
+                return web.json_response({"error": "notes must be a list"}, status=400)
+        except Exception as e:
+            return web.json_response({"error": f"invalid notes payload: {str(e)}"}, status=400)
+
+        notes_file = _get_o1key_notes_file()
+        temp_file = notes_file + ".tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as nf:
+                _json_notes.dump(notes, nf, ensure_ascii=False, indent=2)
+                nf.write("\n")
+            _os_notes.replace(temp_file, notes_file)
+        except Exception as e:
+            return web.json_response({"error": f"save notes failed: {str(e)}"}, status=500)
+
+        return web.json_response({
+            "success": True,
+            "path": notes_file,
+            "count": len(notes),
+        })
 
     @PromptServer.instance.routes.get("/o1key/input_dir")
     async def get_input_dir(request):
