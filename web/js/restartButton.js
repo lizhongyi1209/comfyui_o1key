@@ -3,11 +3,8 @@ import { app } from "../../../scripts/app.js";
 app.registerExtension({
     name: "o1key.restartButton",
     async setup() {
-        let injected = false;
-
         function inject() {
-            if (injected) return;
-            if (document.querySelector("#o1k-restart-btn")) { injected = true; return; }
+            if (document.querySelector("#o1k-restart-btn") && document.querySelector("#o1k-update-btn")) return;
 
             const allBtns = document.querySelectorAll("button, .p-togglebutton, .side-bar-button");
             let logBtn = null;
@@ -20,36 +17,77 @@ app.registerExtension({
             }
             if (!logBtn || !logBtn.parentNode) return;
 
-            const btn = logBtn.cloneNode(false);
-            btn.id = "o1k-restart-btn";
-            btn.setAttribute("aria-label", "重启");
-            btn.title = "重启 ComfyUI";
+            function makeButton(id, label, title, icon) {
+                const btn = logBtn.cloneNode(false);
+                btn.id = id;
+                btn.setAttribute("aria-label", label);
+                btn.title = title;
+                const logStyle = window.getComputedStyle(logBtn);
+                btn.style.display = "flex";
+                btn.style.flexDirection = "column";
+                btn.style.alignItems = "center";
+                btn.style.justifyContent = "center";
+                btn.style.gap = logStyle.gap || "4px";
+                const iconSpan = document.createElement("span");
+                iconSpan.innerHTML = icon;
+                const textSpan = document.createElement("span");
+                textSpan.textContent = label;
+                btn.append(iconSpan, textSpan);
+                return btn;
+            }
 
-            const logStyle = window.getComputedStyle(logBtn);
-            btn.style.display = "flex";
-            btn.style.flexDirection = "column";
-            btn.style.alignItems = "center";
-            btn.style.justifyContent = "center";
-            btn.style.gap = logStyle.gap || "4px";
+            let restartBtn = document.querySelector("#o1k-restart-btn");
+            if (!restartBtn) {
+                restartBtn = makeButton("o1k-restart-btn", "重启", "重启 ComfyUI",
+                    `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>`);
+                restartBtn.addEventListener("click", async () => {
+                    if (!confirm("确定要重启 ComfyUI 吗？")) return;
+                    restartBtn.style.opacity = "0.5";
+                    restartBtn.style.pointerEvents = "none";
+                    await disableExperimentalAssetApi();
+                    try { await fetch("/o1key/restart", { method: "POST" }); } catch {}
+                    pollUntilReady();
+                });
+                logBtn.parentNode.insertBefore(restartBtn, logBtn);
+            }
 
-            const iconSpan = document.createElement("span");
-            iconSpan.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>`;
-            const textSpan = document.createElement("span");
-            textSpan.textContent = "重启";
-            btn.appendChild(iconSpan);
-            btn.appendChild(textSpan);
-
-            btn.addEventListener("click", async () => {
-                if (!confirm("确定要重启 ComfyUI 吗？")) return;
-                btn.style.opacity = "0.5";
-                btn.style.pointerEvents = "none";
-                await disableExperimentalAssetApi();
-                try { await fetch("/o1key/restart", { method: "POST" }); } catch {}
-                pollUntilReady();
-            });
-
-            logBtn.parentNode.insertBefore(btn, logBtn);
-            injected = true;
+            if (!document.querySelector("#o1k-update-btn")) {
+                const updateBtn = makeButton("o1k-update-btn", "更新", "更新 comfyui_o1key 节点包",
+                    `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 18v3h16v-3"/></svg>`);
+                let updating = false;
+                updateBtn.addEventListener("click", async () => {
+                    if (updating) return;
+                    if (!confirm("从 origin/main 拉取 comfyui_o1key 最新版本？")) return;
+                    updating = true;
+                    updateBtn.disabled = true;
+                    updateBtn.style.opacity = "0.5";
+                    updateBtn.title = "正在更新...";
+                    try {
+                        const response = await fetch("/o1key/update", {
+                            method: "POST",
+                            headers: { "X-O1Key-Update": "1" },
+                        });
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.error || "更新失败");
+                        if (!result.updated) {
+                            alert(`已是最新版本（${result.version}）。`);
+                        } else {
+                            const dependencies = result.requirements_changed
+                                ? "\n依赖列表已变化，请先在 ComfyUI 的 Python 环境中执行 pip install -r requirements.txt。"
+                                : "";
+                            alert(`更新完成（${result.version}）。${dependencies}\n请点击“重启”使新版本生效。`);
+                        }
+                    } catch (error) {
+                        alert(`更新失败：${error.message}`);
+                    } finally {
+                        updating = false;
+                        updateBtn.disabled = false;
+                        updateBtn.style.opacity = "";
+                        updateBtn.title = "更新 comfyui_o1key 节点包";
+                    }
+                });
+                restartBtn.after(updateBtn);
+            }
         }
 
         async function disableExperimentalAssetApi() {

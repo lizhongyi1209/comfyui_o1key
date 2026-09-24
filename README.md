@@ -132,45 +132,28 @@ O1KEY_API_KEY=你的API密钥
 
 ## 🔄 更新插件
 
-自动更新脚本**已改为从国内镜像（Gitee）拉取**，国内用户无需科学上网即可更新。
+### 界面更新
 
-### 方法一：自动更新（推荐）⭐
+在 ComfyUI 左侧功能栏点击「更新」（位于「重启」下方）。按钮会从当前 Git 仓库的 `origin/main` 拉取最新版本。完成后点击「重启」使新版本生效。
 
-**Windows 用户：**
-1. 进入插件目录：`ComfyUI\custom_nodes\comfyui_o1key`
-2. 双击运行 `自动更新插件(win).bat`
-3. 等待更新完成
-4. 重启 ComfyUI
+界面更新需要通过 Git 安装、处于 `main` 分支，且节点包文件没有本地修改。更新仅允许快进，不会覆盖本地修改或删除配置。ZIP 安装、分支分叉或网络连接失败时，界面会显示原因，需要手动处理。
 
-**Linux/Mac 用户：**
+如果提示依赖列表已变化，请在 ComfyUI 使用的 Python 环境中执行：
+
 ```bash
 cd ComfyUI/custom_nodes/comfyui_o1key
-chmod +x "自动更新插件(mac).sh"   # 首次运行需要添加执行权限
-./"自动更新插件(mac).sh"
+python -m pip install -r requirements.txt
 ```
 
-### 方法二：手动更新
+### 手动更新
 
-从 Gitee 镜像拉取（国内推荐）：
 ```bash
 cd ComfyUI/custom_nodes/comfyui_o1key
-git remote get-url gitee &>/dev/null || git remote add gitee https://gitee.com/resonLzy/comfyui_o1key.git
-git pull gitee main
-pip install -r requirements.txt --upgrade
+git pull --ff-only origin main
+python -m pip install -r requirements.txt
 ```
 
-从 GitHub 拉取：
-```bash
-cd ComfyUI/custom_nodes/comfyui_o1key
-git pull origin main
-pip install -r requirements.txt --upgrade
-```
-
-**💡 提示：**
-- 自动更新脚本会自动备份和恢复你的 `.config` 配置文件
-- 更新会保留环境变量中配置的 API 密钥
-- 更新检查在每次启动 ComfyUI 时自动进行（不会影响性能）
-- 如果发现新版本，终端会显示更新提示
+更新保留环境变量中配置的 API 密钥。启动时仍会检查是否有新版本。
 
 ---
 

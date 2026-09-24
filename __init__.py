@@ -208,6 +208,10 @@ try:
     from server import PromptServer
     import folder_paths
     from .utils.config import CONFIG_FILE, load_config, NETWORK_ROUTES
+    from .utils.updater import UpdateError, update_package
+    import threading as _update_threading
+
+    _update_lock = _update_threading.Lock()
 
     def _get_o1key_server_port():
         try:
@@ -611,6 +615,23 @@ try:
         except Exception:
             pass
         return web.json_response({"success": True, "deleted": deleted_files})
+
+    @PromptServer.instance.routes.post("/o1key/update")
+    async def update_node_package(request):
+        if request.headers.get("X-O1Key-Update") != "1":
+            return web.json_response({"error": "无效的更新请求。"}, status=403)
+        if not _update_lock.acquire(blocking=False):
+            return web.json_response({"error": "更新正在进行，请稍候。"}, status=409)
+        try:
+            result = await asyncio.to_thread(update_package)
+            return web.json_response(result)
+        except UpdateError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except Exception:
+            logging.exception("o1key update failed")
+            return web.json_response({"error": "更新失败，请查看 ComfyUI 日志。"}, status=500)
+        finally:
+            _update_lock.release()
 
     # === AI 聊天代理（流式 SSE 透传） ===
     @PromptServer.instance.routes.post("/o1key/restart")
